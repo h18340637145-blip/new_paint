@@ -29,28 +29,35 @@ export function SignUpForm({
 
   const handleSignUp = async (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const supabase = createClient();
-    setIsLoading(true);
-    setError(null);
-
+    if (isLoading) return;
     if (password !== repeatPassword) {
-      setError("Passwords do not match");
-      setIsLoading(false);
+      setError("两次输入的密码不一致。");
       return;
     }
 
+    setIsLoading(true);
+    setError(null);
     try {
-      const { error } = await supabase.auth.signUp({
-        email,
+      const { data, error } = await createClient().auth.signUp({
+        email: email.trim(),
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/protected`,
+          emailRedirectTo: `${window.location.origin}/auth/confirm`,
         },
       });
+      if (error?.code === "email_address_not_authorized") {
+        throw new Error("当前邮件服务无法向这个邮箱发送验证邮件，请联系管理员。");
+      }
+      if (error?.code === "over_email_send_rate_limit") {
+        throw new Error("验证邮件发送次数已达上限，请稍后重试。");
+      }
+      if (error?.code === "user_already_exists" || error?.code === "email_exists") {
+        throw new Error("该邮箱已注册，请返回登录或重置密码。");
+      }
       if (error) throw error;
-      router.push("/auth/sign-up-success");
+      router.replace(data.session ? "/protected" : "/auth/sign-up-success");
     } catch (error: unknown) {
-      setError(error instanceof Error ? error.message : "An error occurred");
+      setError(error instanceof Error ? error.message : "注册失败，请稍后重试。");
     } finally {
       setIsLoading(false);
     }
@@ -60,17 +67,18 @@ export function SignUpForm({
     <div className={cn("flex flex-col gap-6", className)} {...props}>
       <Card>
         <CardHeader>
-          <CardTitle className="text-2xl">Sign up</CardTitle>
-          <CardDescription>Create a new account</CardDescription>
+          <CardTitle className="text-2xl">注册创作工作台</CardTitle>
+          <CardDescription>注册后请通过邮件验证邮箱。</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSignUp}>
             <div className="flex flex-col gap-6">
               <div className="grid gap-2">
-                <Label htmlFor="email">Email</Label>
+                <Label htmlFor="email">邮箱</Label>
                 <Input
                   id="email"
                   type="email"
+                  autoComplete="email"
                   placeholder="m@example.com"
                   required
                   value={email}
@@ -79,11 +87,12 @@ export function SignUpForm({
               </div>
               <div className="grid gap-2">
                 <div className="flex items-center">
-                  <Label htmlFor="password">Password</Label>
+                  <Label htmlFor="password">密码</Label>
                 </div>
                 <Input
                   id="password"
                   type="password"
+                  autoComplete="new-password"
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -91,25 +100,26 @@ export function SignUpForm({
               </div>
               <div className="grid gap-2">
                 <div className="flex items-center">
-                  <Label htmlFor="repeat-password">Repeat Password</Label>
+                  <Label htmlFor="repeat-password">确认密码</Label>
                 </div>
                 <Input
                   id="repeat-password"
                   type="password"
+                  autoComplete="new-password"
                   required
                   value={repeatPassword}
                   onChange={(e) => setRepeatPassword(e.target.value)}
                 />
               </div>
-              {error && <p className="text-sm text-red-500">{error}</p>}
+              {error && <p role="alert" className="text-sm text-red-500">{error}</p>}
               <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading ? "Creating an account..." : "Sign up"}
+                {isLoading ? "注册中…" : "注册"}
               </Button>
             </div>
             <div className="mt-4 text-center text-sm">
-              Already have an account?{" "}
+              已有账号？{" "}
               <Link href="/auth/login" className="underline underline-offset-4">
-                Login
+                返回登录
               </Link>
             </div>
           </form>

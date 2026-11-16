@@ -6,8 +6,11 @@ import { type NextRequest } from "next/server";
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const token_hash = searchParams.get("token_hash");
+  const code = searchParams.get("code");
   const type = searchParams.get("type") as EmailOtpType | null;
-  const next = searchParams.get("next") ?? "/";
+  const destination = searchParams.get("next") ?? (type === "invite" ? "/auth/update-password" : "/");
+  const next = /^\/(?![\/\\])/.test(destination) && !destination.includes("\\")
+    ? destination : "/";
 
   if (token_hash && type) {
     const supabase = await createClient();
@@ -17,14 +20,17 @@ export async function GET(request: NextRequest) {
       token_hash,
     });
     if (!error) {
-      // redirect user to specified redirect URL or root of app
       redirect(next);
-    } else {
-      // redirect the user to an error page with some instructions
-      redirect(`/auth/error?error=${error?.message}`);
     }
+    redirect(`/auth/error?${new URLSearchParams({ error: error.message })}`);
   }
 
-  // redirect the user to an error page with some instructions
-  redirect(`/auth/error?error=No token hash or type`);
+  if (code) {
+    const supabase = await createClient();
+    const { error } = await supabase.auth.exchangeCodeForSession(code);
+    if (!error) redirect(next);
+    redirect(`/auth/error?${new URLSearchParams({ error: "请在注册时使用的浏览器打开确认链接，或验证后重新登录。" })}`);
+  }
+
+  redirect(`/auth/error?${new URLSearchParams({ error: "确认链接缺少必要参数。" })}`);
 }

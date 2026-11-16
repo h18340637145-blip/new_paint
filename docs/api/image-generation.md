@@ -4,7 +4,7 @@
 
 ## 路由与项目状态
 
-- 使用 Supabase Auth 登录。仅产品所有者和受邀用户可访问创作路由、项目数据和生图接口。页面和服务端均检查访问权限，数据库与存储继续按项目所有者隔离数据。
+- 使用 Supabase Auth 开放邮箱注册。首次访问工作台时，服务端核验当前会话对应的已验证邮箱并自动登记成员。数据库与存储按项目所有者隔离数据。
 - `/protected` 发送时创建项目并提交首条任务。创建项目、记录首条任务和返回项目 ID 使用同一提交标识，重试时复用已有项目。点击「新建项目」时只创建空项目。
 - `/projects` 按 `updated_at` 倒序分页，使用项目 ID 作为同时间戳的稳定排序条件。
 - `/canvas` 用项目 ID 恢复任务历史、生成图片及节点位置。首版每个项目使用一条连续历史，每次发送独立提交当前提示词、参考图和模型配置。右侧面板默认 `420px` 并在浏览器按设备记住宽度，范围为 `320–620px`。
@@ -42,10 +42,28 @@
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase 项目 URL。 |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase 可发布密钥。受登录会话与 RLS 约束。 |
 | `KIE_API_KEY` | Kie.ai Bearer 密钥。仅 Next.js 服务端读取。 |
+| `SUPABASE_SECRET_KEY` | Supabase 服务端密钥，用于保存可信任务状态、分配上传签名和转存结果。现有项目也可用 `SUPABASE_SERVICE_ROLE_KEY`。 |
+| `KIE_IMAGE_HOSTS` | 可选。以逗号分隔的 Kie.ai 图片下载主机，默认使用模型文档中的图片主机。 |
 
-首版使用登录用户的 Supabase 会话和轮询。上述三项覆盖此方案的应用环境变量。实际密钥放入本地 `.env.local` 和部署环境的变量配置，仓库仅保留 [.env.example](../../.env.example)。
+首版使用登录用户的 Supabase 会话校验权限和读取项目，使用服务端密钥写入任务编号及结果等受信数据。实际密钥放入本地 `.env.local` 和部署环境的变量配置，仓库仅保留 [.env.example](../../.env.example)。
 
-## 实现时补齐的交付文档
+## 初始化与注册
 
-- **数据库与存储迁移**记录表结构、外键、唯一约束、索引、私有存储桶和 RLS 策略，并验证用户之间的数据隔离。
-- **应用接口契约**记录项目列表、首条任务提交、参考图上传、任务查询与重试的请求和响应，以及权限、参数校验和错误响应。
+1. 应用 [工作台迁移](../../supabase/migrations/20261116000000_create_canvas_studio.sql)，创建工作台数据表、私有存储桶和 RLS 策略。
+2. 在 Supabase Auth 中开启邮箱注册和邮箱验证。在允许的重定向地址中添加部署站点及本地的 `/auth/confirm` 完整地址。对普通用户开放邮件验证时，配置用于发送验证邮件的自定义 SMTP。
+3. 配置上表中的密钥与项目 URL，在项目根目录运行 `npm run dev`。从登录页进入注册，验证邮箱后进入 `/protected`。既有账号可继续登录。
+
+发送邀请邮件时，将 Supabase 邀请模板链接指向应用的 `/auth/confirm?token_hash={{ .TokenHash }}&type=invite`。受邀用户通过确认链接建立登录会话，并在密码设置页创建密码。
+
+## 应用请求
+
+工作台使用 `POST /api/studio`。所有请求均为 JSON，携带登录会话、`projectId` 和下表中的 `action`，失败响应为 `{ error }`。
+
+| 操作 | 附加参数 | 成功响应 |
+| --- | --- | --- |
+| `prepare-upload` | `assetId`、`type`、`size`，首页首次提交时附加 `createProject` | `{ path, token }`，客户端使用签名地址直传 Storage |
+| `complete-upload` | `assetId` | `{ id, url }`，服务端验文件签名和大小后登记资产，并返回查看地址 |
+| `submit` | `submissionId`、`prompt`、`config`、可选 `referenceId`，首页首次提交时附加 `createProject` | `202` 与 `{ id }`，其中 `id` 为项目 ID |
+| `sync` | 无 | `{ submissions }`，含图片查看地址与各张任务状态 |
+| `retry` | 失败项 `jobId` | `{ submissions }` |
+| `position` | `jobId`、`x`、`y` | `{ ok: true }` |

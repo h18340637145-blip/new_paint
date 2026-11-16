@@ -1,3 +1,4 @@
+import Link from "next/link";
 import {
   Card,
   CardContent,
@@ -14,15 +15,19 @@ export default function Page() {
           <Card>
             <CardHeader>
               <CardTitle className="text-2xl">
-                Thank you for signing up!
+                请查看邮箱
               </CardTitle>
-              <CardDescription>Check your email to confirm</CardDescription>
+              <CardDescription>
+                首次注册时，请打开邮箱中的验证链接。已经验证过的账号可以直接登录。
+              </CardDescription>
             </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">
-                You&apos;ve successfully signed up. Please check your email to
-                confirm your account before signing in.
-              </p>
+            <CardContent className="flex flex-wrap gap-4">
+              <Link href="/auth/login" className="text-sm underline underline-offset-4">
+                返回登录
+              </Link>
+              <Link href="/auth/forgot-password" className="text-sm underline underline-offset-4">
+                重置密码
+              </Link>
             </CardContent>
           </Card>
         </div>

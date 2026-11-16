@@ -20,6 +20,7 @@ export async function updateSession(request: NextRequest) {
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
     {
       cookies: {
+        encode: "tokens-only",
         getAll() {
           return request.cookies.getAll();
         },
@@ -50,6 +51,7 @@ export async function updateSession(request: NextRequest) {
   if (
     request.nextUrl.pathname !== "/" &&
     !user &&
+    !request.nextUrl.pathname.startsWith("/api/") &&
     !request.nextUrl.pathname.startsWith("/login") &&
     !request.nextUrl.pathname.startsWith("/auth")
   ) {

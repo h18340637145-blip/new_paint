@@ -1,43 +1,31 @@
-import { redirect } from "next/navigation";
+import Link from "next/link";
+import { ChevronRight, Image as ImageIcon } from "lucide-react";
+import { HomeComposer } from "@/components/studio/home";
+import { ProjectGrid } from "@/components/studio/project-grid";
+import { studioPageSession } from "@/lib/studio/auth";
+import { readProjects } from "@/lib/studio/projects";
 
-import { createClient } from "@/lib/supabase/server";
-import { InfoIcon } from "lucide-react";
-import { FetchDataSteps } from "@/components/tutorial/fetch-data-steps";
-import { Suspense } from "react";
-
-async function UserDetails() {
-  const supabase = await createClient();
-  const { data, error } = await supabase.auth.getClaims();
-
-  if (error || !data?.claims) {
-    redirect("/auth/login");
-  }
-
-  return JSON.stringify(data.claims, null, 2);
-}
-
-export default function ProtectedPage() {
+export default async function ProtectedPage() {
+  const { supabase } = await studioPageSession();
+  const projects = await readProjects(supabase, 4);
   return (
-    <div className="flex-1 w-full flex flex-col gap-12">
-      <div className="w-full">
-        <div className="bg-accent text-sm p-3 px-5 rounded-md text-foreground flex gap-3 items-center">
-          <InfoIcon size="16" strokeWidth={2} />
-          This is a protected page that you can only see as an authenticated
-          user
+    <main className="min-h-screen bg-white pb-14 text-neutral-950">
+      <section className="mx-auto flex min-h-[54vh] w-full max-w-[600px] flex-col justify-center gap-5 px-5 py-12">
+        <h1 className="flex items-center justify-center gap-2 text-center text-2xl font-semibold tracking-tight sm:text-3xl">
+          <span className="grid size-8 place-items-center rounded-full bg-neutral-950 text-white"><ImageIcon size={16} /></span>
+          用画布开始创作
+        </h1>
+        <HomeComposer />
+      </section>
+      <section className="mx-auto max-w-[1580px] px-5 sm:px-12">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-sm font-semibold">最近项目</h2>
+          <Link href="/projects" className="flex items-center gap-1 text-xs text-neutral-600 hover:text-neutral-950">
+            查看全部<ChevronRight size={13} />
+          </Link>
         </div>
-      </div>
-      <div className="flex flex-col gap-2 items-start">
-        <h2 className="font-bold text-2xl mb-4">Your user details</h2>
-        <pre className="text-xs font-mono p-3 rounded border max-h-32 overflow-auto">
-          <Suspense>
-            <UserDetails />
-          </Suspense>
-        </pre>
-      </div>
-      <div>
-        <h2 className="font-bold text-2xl mb-4">Next steps</h2>
-        <FetchDataSteps />
-      </div>
-    </div>
+        <ProjectGrid projects={projects} />
+      </section>
+    </main>
   );
 }
