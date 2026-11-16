@@ -12,6 +12,7 @@
    - `/docs/images/`：存放截图、界面参考图、流程图等图片资料。
    - `/docs/api/`：存放 API 文档、接口约定、第三方服务对接说明。
    - 生图模型 API 文档索引
+     - [项目生图接入设计](./docs/api/image-generation.md)
      - [GPT Image 2 文生图](./docs/api/gpt-image-2-text-to-image.md)
      - [GPT Image 2 图生图](./docs/api/gpt-image-2-image-to-image.md)
      - [Nano Banana 2 生图](./docs/api/nanobanana2.md)
