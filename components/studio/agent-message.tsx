@@ -12,6 +12,7 @@ export function AgentMessage({ turn }: { turn: StudioAgentTurn }) {
   return (
     <article className="space-y-3 text-sm">
       <div className="ml-auto w-fit max-w-[90%] rounded-xl bg-neutral-100 px-3 py-2">
+        {turn.skillName && <span className="mb-1 inline-block rounded bg-white px-1.5 py-0.5 text-xs text-neutral-700">Skill · {turn.skillName}</span>}
         <p className="whitespace-pre-wrap break-words">{turn.prompt}</p>
         {turn.attachments.length > 0 && <div className="mt-2 flex flex-wrap gap-2">
           {turn.attachments.map((asset) => <AttachmentCard key={asset.id} asset={asset} />)}

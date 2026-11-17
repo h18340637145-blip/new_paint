@@ -122,3 +122,10 @@
 - Agent 固定使用 KIE GPT Image 2.5 Flare。无参考图时使用文生图，有参考图时按顺序传递图生图参考素材。保存实际模型、参数与参考素材，生成结果进入已有记录、素材库及画布。重试沿用原模型和素材。
 
 Agent 规划、视觉理解和工具调用使用 DeepSeek Flash，图片生成使用 KIE GPT Image 2.5 Flare。
+
+### Agent Skill
+
+- 右侧「附件」旁提供「Skill」入口。用户可上传 `SKILL.md`，在当前项目内查看技能名称和最多两行的简介、选择本次技能或移除自己的技能。
+- 技能保存 YAML frontmatter 中的 `name`、`description` 以及完整 Markdown 正文。技能按用户和项目隔离。
+- 已发送的用户消息保存技能名称，并与输入文字和附件一起显示。发送后清空草稿和技能选择。
+- [公众号封面示例技能](./skills/wechat-cover/SKILL.md)读取 Markdown 原文并先询问风格，用户选择后用现有 GPT Image 2.5 Flare 流程提交四张同风格、不同构图的宽幅封面。

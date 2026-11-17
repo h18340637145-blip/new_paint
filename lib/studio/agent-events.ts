@@ -11,9 +11,16 @@ export interface StudioAttachment {
   url: string;
 }
 
+export interface StudioSkill {
+  id: string;
+  name: string;
+  description: string;
+}
+
 export interface StudioAgentTurn {
   id: string;
   prompt: string;
+  skillName?: string | null;
   attachments: StudioAttachment[];
   events: StudioAgentEvent[];
   status: "running" | "complete" | "failed";

@@ -8,7 +8,8 @@ import {
   manualModels, models, resolutions, supportedRatios, type GenerationConfig,
 } from "@/lib/studio/models";
 import type { ImageAsset } from "@/lib/studio/types";
-import type { StudioAttachment } from "@/lib/studio/agent-events";
+import { SkillPicker } from "./skill-picker";
+import type { StudioAttachment, StudioSkill } from "@/lib/studio/agent-events";
 import { maxMarkdownBytes, markdownFilename } from "@/lib/studio/attachment-types";
 import { AttachmentCard } from "./attachment-card";
 import { ModeMenu, type StudioMode } from "./mode-menu";
@@ -20,14 +21,16 @@ export interface ComposerInput {
   file: File | null;
   asset: ImageAsset | null;
   attachments?: StudioAttachment[];
+  skill?: StudioSkill | null;
 }
 
 export function Composer({
   onSend, home = false, onPickCanvas, canvasAsset, onClearCanvas, onUpload, selecting = false,
-  mode = "image", onModeChange, generating = false, attachments = [], onRemoveAttachment, onClearAttachments,
+  mode = "image", onModeChange, generating = false, attachments = [], onRemoveAttachment, onClearAttachments, projectId,
 }: {
   onSend: (input: ComposerInput) => Promise<void>;
   home?: boolean;
+  projectId?: string;
   onPickCanvas?: () => void;
   canvasAsset?: ImageAsset | null;
   onClearCanvas?: () => void;
@@ -40,6 +43,8 @@ export function Composer({
   onRemoveAttachment?: (id: string) => void;
   onClearAttachments?: () => void;
 }) {
+  const [skill, setSkill] = useState<StudioSkill | null>(null);
+  const [skillMutating, setSkillMutating] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [config, setConfig] = useState(defaultConfig);
   const [file, setFile] = useState<File | null>(null);
@@ -51,7 +56,7 @@ export function Composer({
   const input = useRef<HTMLInputElement>(null);
   const submitInProgress = useRef(false);
   const image = canvasAsset?.url ?? preview;
-  const busy = pending || uploading;
+  const busy = pending || uploading || skillMutating;
   const isAgent = mode === "agent";
   const maySend = !!prompt.trim() || (isAgent && attachments.length > 0);
   const inUpload = useRef(false);
@@ -77,13 +82,13 @@ export function Composer({
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const value = prompt.trim();
-    if (!maySend || submitInProgress.current || selecting || uploading) return;
+    if (!maySend || submitInProgress.current || selecting || uploading || skillMutating) return;
     submitInProgress.current = true;
     setPending(true);
     setError("");
     setMenu(null);
-    const submission = { prompt: value, config, file: canvasAsset ? null : file, asset: canvasAsset ?? null, attachments };
-    const reset = () => { setPrompt(""); replaceFile(null); onClearCanvas?.(); onClearAttachments?.(); };
+    const submission = { prompt: value, config, file: canvasAsset ? null : file, asset: canvasAsset ?? null, attachments, skill: isAgent ? skill : null };
+    const reset = () => { setPrompt(""); replaceFile(null); onClearCanvas?.(); onClearAttachments?.(); setSkill(null); };
     try {
       const sending = onSend(submission);
       if (mode === "agent") reset();
@@ -173,6 +178,7 @@ export function Composer({
               {uploading ? <LoaderCircle size={14} className="animate-spin" /> : <ImagePlus size={14} />}{uploading ? "上传中" : "附件"}
             </button>
           )}
+          {isAgent && projectId && <SkillPicker projectId={projectId} selected={skill} onChange={setSkill} onMutating={setSkillMutating} disabled={pending || uploading} />}
           {menu === "reference" && (
             <div className="absolute bottom-full left-0 z-30 mb-2 grid min-w-40 gap-1 rounded-xl border border-neutral-200 bg-white p-1.5 text-sm shadow-lg">
               <button type="button" className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-neutral-100"

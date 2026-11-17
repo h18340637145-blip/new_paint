@@ -26,17 +26,17 @@ export async function describeAttachment(db: SupabaseClient, projectId: string, 
 
 export async function readAgentTurns(db: SupabaseClient, projectId: string): Promise<StudioAgentTurn[]> {
   const { data, error } = await db.from("studio_agent_turns")
-    .select("id,prompt,attachment_ids,events,status,created_at").eq("project_id", projectId)
+    .select("id,prompt,attachment_ids,events,status,created_at,skill_name").eq("project_id", projectId)
     .order("created_at", { ascending: false }).limit(100).returns<{
       id: string; prompt: string; attachment_ids: string[]; events: StudioAgentEvent[];
-      status: StudioAgentTurn["status"]; created_at: string;
+      status: StudioAgentTurn["status"]; created_at: string; skill_name: string | null;
     }[]>();
   if (error) throw new StudioError("无法读取 Agent 对话。", 503);
   const assets = await readAgentAssets(db, projectId, data.flatMap((turn) => turn.attachment_ids));
   const attachments = new Map(await Promise.all(assets.map(async (asset) =>
     [asset.id, await describeAttachment(db, projectId, asset)] as const)));
   return data.reverse().map((turn) => ({
-    id: turn.id, prompt: turn.prompt, status: turn.status, createdAt: turn.created_at, events: turn.events,
+    id: turn.id, prompt: turn.prompt, status: turn.status, createdAt: turn.created_at, events: turn.events, skillName: turn.skill_name,
     attachments: turn.attachment_ids.flatMap((id) => {
       const asset = attachments.get(id);
       return asset ? [asset] : [];

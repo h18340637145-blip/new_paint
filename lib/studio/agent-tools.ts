@@ -12,7 +12,8 @@ const assetIdSchema = { type: "string", description: "项目素材的 UUID" };
 const noParameters = { type: "object", properties: {}, additionalProperties: false };
 const assetParameters = { type: "object", properties: { assetId: assetIdSchema }, required: ["assetId"], additionalProperties: false };
 
-export function createStudioTools(database: SupabaseClient, project: Project): AgentTool[] {
+export function createStudioTools(database: SupabaseClient, project: Project, cover?: { style: string; onSubmit: () => void }): AgentTool[] {
+  let coverSubmitted = false;
   const inspected = new Set<string>();
 
   function parseId(input: unknown) {
@@ -61,9 +62,17 @@ export function createStudioTools(database: SupabaseClient, project: Project): A
       },
     },
     {
-      name: "generate_image", label: "生成图片", description: "用 GPT Image 2.5 Flare 开始生图。按图一、图二的顺序传入已查看的参考图。没有参考图时传空数组。",
+      name: "generate_image", label: "生成图片", description: cover
+        ? `一次生成四张「${cover.style}」宽幅公众号封面。提供四条各自完整且构图不同的提示词。`
+        : "用 GPT Image 2.5 Flare 开始生图。按图一、图二的顺序传入已查看的参考图。没有参考图时传空数组。",
       executionMode: "sequential",
-      parameters: {
+      parameters: cover ? {
+        type: "object", additionalProperties: false, required: ["prompts", "referenceIds"],
+        properties: {
+          prompts: { type: "array", minItems: 4, maxItems: 4, items: { type: "string" } },
+          referenceIds: { type: "array", items: assetIdSchema, maxItems: 16 },
+        },
+      } : {
         type: "object", additionalProperties: false, required: ["prompt", "referenceIds"],
         properties: {
           prompt: { type: "string" },
@@ -72,28 +81,55 @@ export function createStudioTools(database: SupabaseClient, project: Project): A
         },
       },
       execute: async (_, raw) => {
-        const value = raw as { prompt?: unknown; referenceIds?: unknown; aspectRatio?: unknown };
-        const prompt = typeof value?.prompt === "string" ? value.prompt.trim() : "";
-        if (!prompt || prompt.length > maxPromptLength
-          || !Array.isArray(value.referenceIds) || value.referenceIds.length > 16) {
+        const value = raw as { prompt?: unknown; prompts?: unknown; referenceIds?: unknown; aspectRatio?: unknown };
+        const inputs = cover ? value?.prompts : [value?.prompt];
+        if (!Array.isArray(inputs) || inputs.length !== (cover ? 4 : 1)
+          || !inputs.every((input) => typeof input === "string" && input.trim() && input.trim().length <= maxPromptLength)
+          || new Set(inputs.map((input: string) => input.trim())).size !== inputs.length
+          || !Array.isArray(value?.referenceIds) || value.referenceIds.length > 16) {
           throw new Error("请提供有效提示词和参考图列表。");
         }
         const orderedReferenceIds = value.referenceIds.map(parseId);
         if (orderedReferenceIds.some((id) => !inspected.has(id))) throw new Error("请先逐一查看参考图。");
         const choices = ["auto", "1:1", "3:2", "2:3", "16:9", "9:16"];
-        const aspectRatio = value.aspectRatio ?? "auto";
-        if (typeof aspectRatio !== "string" || !choices.includes(aspectRatio)) throw new Error("不支持这个图片比例。");
-        const id = crypto.randomUUID();
-        await ensureSubmission(database, project, {
-          id, prompt, referenceId: null, orderedReferenceIds,
-          config: { model: "gpt-image-2-5-flare", count: 1, resolution: "1K", aspectRatio },
-        });
-        await startPending(database, project, id);
-        const { data, error } = await database.from("studio_jobs").select("status,error_message")
-          .eq("project_id", project.id).eq("submission_id", id).single();
-        if (error || !data) throw new Error("任务已记录，但暂时无法读取提交状态。");
-        if (data.status === "failed" || data.status === "unknown") throw new Error(data.error_message || "任务暂未成功提交。");
-        return json({ submissionId: id, model: "GPT Image 2.5 Flare", status: data.status });
+        const ratio = cover ? "16:9" : value.aspectRatio ?? "auto";
+        if (typeof ratio !== "string" || !choices.includes(ratio)) throw new Error("不支持这个图片比例。");
+        const aspectRatio = ratio;
+        async function prepare(prompt: string) {
+          const id = crypto.randomUUID();
+          await ensureSubmission(database, project, {
+            id, prompt, referenceId: null, orderedReferenceIds,
+            config: { model: "gpt-image-2-5-flare", count: 1, resolution: "1K", aspectRatio },
+          });
+          return id;
+        }
+
+        async function submit(id: string) {
+          await startPending(database, project, id);
+          const { data, error } = await database.from("studio_jobs").select("status,error_message")
+            .eq("project_id", project.id).eq("submission_id", id).single();
+          if (error || !data) throw new Error("任务已记录，但暂时无法读取提交状态。");
+          if (data.status === "failed" || data.status === "unknown") throw new Error(data.error_message || "任务暂未成功提交。");
+          return { submissionId: id, model: "GPT Image 2.5 Flare", status: data.status };
+        }
+
+        const prompts = inputs.map((input: string) => input.trim());
+        if (!cover) return json(await submit(await prepare(prompts[0])));
+        if (coverSubmitted) throw new Error("本轮封面任务已提交，请查看任务状态。");
+        coverSubmitted = true;
+        cover.onSubmit();
+        // 顺序分配画布位置，再并行提交模型任务。
+        const preparations = [];
+        for (const prompt of prompts) {
+          preparations.push((await Promise.allSettled([prepare(prompt)]))[0]);
+        }
+        const results = await Promise.allSettled(preparations.map(async (entry) => {
+          if (entry.status === "rejected") throw entry.reason;
+          return submit(entry.value);
+        }));
+        return json(results.map((result, index) => result.status === "fulfilled"
+          ? { cover: index + 1, ...result.value }
+          : { cover: index + 1, status: "failed", error: result.reason instanceof Error ? result.reason.message : "提交失败。" }));
       },
     },
     {

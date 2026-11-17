@@ -211,16 +211,16 @@ export function CanvasWorkspace({ project, initial, initialAgentTurns, initialPl
       let id = crypto.randomUUID();
       setAgentTurns((previous) => [...previous, {
         id, prompt: input.prompt, attachments: input.attachments ?? [],
-        status: "running", events: [], createdAt: new Date().toISOString(),
+        skillName: input.skill?.name, status: "running", events: [], createdAt: new Date().toISOString(),
       }]);
       try {
-        await sendAgentMessage(project.id, input.prompt, (input.attachments ?? []).map((item) => item.id), (event) => {
+        await sendAgentMessage(project.id, input.prompt, (input.attachments ?? []).map((item) => item.id), input.skill?.id ?? null, (event) => {
           const target = id;
           if (event.type === "start") id = event.id;
           setAgentTurns((previous) => previous.map((turn) => {
             if (turn.id !== target) return turn;
             if (event.type === "start") return {
-              ...turn, id: event.id, prompt: event.prompt, attachments: event.attachments, createdAt: event.createdAt,
+              ...turn, id: event.id, prompt: event.prompt, attachments: event.attachments, createdAt: event.createdAt, skillName: event.skillName,
             };
             if (event.type === "done") return { ...turn, status: turn.status === "failed" ? "failed" : "complete" };
             return { ...turn, status: event.type === "error" ? "failed" : turn.status, events: [...turn.events, event] };
@@ -410,7 +410,7 @@ export function CanvasWorkspace({ project, initial, initialAgentTurns, initialPl
         </div>
         <div className="px-2 pb-2">
           {error && <div role="alert" className="mb-2 rounded-lg bg-red-50 p-2 text-xs text-red-700">{error}</div>}
-          <Composer onSend={send} mode={mode} onModeChange={setMode} generating={active || !!regenerating} selecting={selecting} canvasAsset={asset} onClearCanvas={() => setAsset(null)}
+          <Composer projectId={project.id} onSend={send} mode={mode} onModeChange={setMode} generating={active || !!regenerating} selecting={selecting} canvasAsset={asset} onClearCanvas={() => setAsset(null)}
             attachments={attachments} onClearAttachments={() => setAttachments([])}
             onRemoveAttachment={(id) => setAttachments((previous) => previous.filter((item) => item.id !== id))}
             onUpload={async (file) => {
