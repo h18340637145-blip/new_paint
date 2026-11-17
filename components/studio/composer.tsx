@@ -5,19 +5,26 @@ import { NanoBanana, OpenAI } from "@lobehub/icons";
 import { ArrowUp, ChevronDown, ImagePlus, LayoutGrid, LoaderCircle, Paperclip, Plus, X } from "lucide-react";
 import {
   configLabel, defaultConfig, imageTypes, maxPromptLength, maxReferenceSize,
-  models, resolutions, supportedRatios, type GenerationConfig, type Model,
+  manualModels, models, resolutions, supportedRatios, type GenerationConfig,
 } from "@/lib/studio/models";
 import type { ImageAsset } from "@/lib/studio/types";
+import type { StudioAttachment } from "@/lib/studio/agent-events";
+import { maxMarkdownBytes, markdownFilename } from "@/lib/studio/attachment-types";
+import { AttachmentCard } from "./attachment-card";
+import { ModeMenu, type StudioMode } from "./mode-menu";
+export type { StudioMode } from "./mode-menu";
 
 export interface ComposerInput {
   prompt: string;
   config: GenerationConfig;
   file: File | null;
   asset: ImageAsset | null;
+  attachments?: StudioAttachment[];
 }
 
 export function Composer({
   onSend, home = false, onPickCanvas, canvasAsset, onClearCanvas, onUpload, selecting = false,
+  mode = "image", onModeChange, generating = false, attachments = [], onRemoveAttachment, onClearAttachments,
 }: {
   onSend: (input: ComposerInput) => Promise<void>;
   home?: boolean;
@@ -26,6 +33,12 @@ export function Composer({
   onClearCanvas?: () => void;
   onUpload?: (file: File) => Promise<void>;
   selecting?: boolean;
+  mode?: StudioMode;
+  onModeChange?: (mode: StudioMode) => void;
+  generating?: boolean;
+  attachments?: StudioAttachment[];
+  onRemoveAttachment?: (id: string) => void;
+  onClearAttachments?: () => void;
 }) {
   const [prompt, setPrompt] = useState("");
   const [config, setConfig] = useState(defaultConfig);
@@ -39,6 +52,9 @@ export function Composer({
   const submitInProgress = useRef(false);
   const image = canvasAsset?.url ?? preview;
   const busy = pending || uploading;
+  const isAgent = mode === "agent";
+  const maySend = !!prompt.trim() || (isAgent && attachments.length > 0);
+  const inUpload = useRef(false);
 
   useEffect(() => {
     return () => { if (preview) URL.revokeObjectURL(preview); };
@@ -61,16 +77,18 @@ export function Composer({
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const value = prompt.trim();
-    if (!value || submitInProgress.current || selecting || uploading) return;
+    if (!maySend || submitInProgress.current || selecting || uploading) return;
     submitInProgress.current = true;
     setPending(true);
     setError("");
     setMenu(null);
+    const submission = { prompt: value, config, file: canvasAsset ? null : file, asset: canvasAsset ?? null, attachments };
+    const reset = () => { setPrompt(""); replaceFile(null); onClearCanvas?.(); onClearAttachments?.(); };
     try {
-      await onSend({ prompt: value, config, file: canvasAsset ? null : file, asset: canvasAsset ?? null });
-      setPrompt("");
-      replaceFile(null);
-      onClearCanvas?.();
+      const sending = onSend(submission);
+      if (mode === "agent") reset();
+      await sending;
+      if (mode === "image") reset();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "发送失败，请重试。");
     } finally {
@@ -79,43 +97,69 @@ export function Composer({
     }
   }
 
+  async function addFiles(items: File[]) {
+    if (!items.length || busy || inUpload.current) return;
+    const batch = isAgent ? items : items.slice(0, 1);
+    if (isAgent && attachments.length + batch.length > 16) {
+      setError("每条消息最多添加 16 个附件。");
+      return;
+    }
+    setError("");
+    inUpload.current = true;
+    setUploading(true);
+    try {
+      for (const selected of batch) {
+        const markdown = isAgent && markdownFilename.test(selected.name);
+        if (!selected.size || (markdown ? selected.size > maxMarkdownBytes
+          : !imageTypes.includes(selected.type) || selected.size > maxReferenceSize)) {
+          throw new Error(isAgent ? "请选择不超过 10 MB 的图片或 256 KB 的 Markdown。"
+            : "请选择不超过 10 MB 的 JPEG、PNG 或 WebP 图片。");
+        }
+        if (onUpload) {
+          await onUpload(selected);
+          replaceFile(null);
+        } else {
+          onClearCanvas?.();
+          replaceFile(selected);
+        }
+      }
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "上传失败，请重试。");
+    } finally {
+      inUpload.current = false;
+      setUploading(false);
+    }
+  }
+
   const ModelIcon = config.model === "gpt-image-2" ? OpenAI : NanoBanana;
 
   return (
-    <form onSubmit={send} className={`relative rounded-2xl border border-neutral-200 bg-white p-3 text-neutral-900 shadow-sm ${home ? "w-full" : ""}`}>
+    <form onSubmit={send}
+      onDragOver={(event) => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }}
+      onDrop={(event) => {
+        if (event.dataTransfer.files.length) { event.preventDefault(); void addFiles(Array.from(event.dataTransfer.files)); }
+      }}
+      onPaste={(event) => {
+        if (event.clipboardData.files.length) { event.preventDefault(); void addFiles(Array.from(event.clipboardData.files)); }
+      }}
+      className={`relative rounded-2xl border border-neutral-200 bg-white p-3 text-neutral-900 shadow-sm ${home ? "w-full" : ""}`}>
       <input
         type="file"
         ref={input}
         className="hidden"
-        accept={imageTypes.join(",")}
-        onChange={async (event) => {
-          const selected = event.target.files?.[0];
+        accept={[...imageTypes, ...(isAgent ? [".md", ".markdown"] : [])].join(",")}
+        multiple={isAgent}
+        onChange={(event) => {
+          const selected = Array.from(event.target.files ?? []);
           event.target.value = "";
-          if (!selected) return;
-          if (!imageTypes.includes(selected.type) || selected.size > maxReferenceSize) {
-            setError("请选择不超过 10 MB 的 JPEG、PNG 或 WebP 图片。");
-            return;
-          }
-          setError("");
-          if (onUpload) {
-            setUploading(true);
-            try {
-              await onUpload(selected);
-              replaceFile(null);
-            } catch (failure) {
-              setError(failure instanceof Error ? failure.message : "上传失败，请重试。");
-            } finally {
-              setUploading(false);
-            }
-            return;
-          }
-          onClearCanvas?.();
-          replaceFile(selected);
+          void addFiles(selected);
         }}
       />
       {(image || !home) && (
-        <div className="relative mb-1 flex items-center gap-2">
-          {image && (
+        <div className="relative mb-1 flex flex-wrap items-center gap-2">
+          {isAgent && attachments.map((asset) => <AttachmentCard key={asset.id} asset={asset}
+            onRemove={busy ? undefined : () => onRemoveAttachment?.(asset.id)} />)}
+          {!isAgent && image && (
             <div className="relative size-12">
               {/* eslint-disable-next-line @next/next/no-img-element -- 本地预览和短期签名图片直接显示。 */}
               <img className="size-full rounded-xl object-cover" src={image} alt="参考图" />
@@ -126,13 +170,13 @@ export function Composer({
           {!home && (
             <button type="button" disabled={busy} aria-expanded={menu === "reference"} onClick={() => setMenu(menu === "reference" ? null : "reference")}
               className="flex h-12 w-12 flex-col items-center justify-center gap-1 rounded-xl bg-neutral-100 text-[10px] text-neutral-600 hover:bg-neutral-200">
-              {uploading ? <LoaderCircle size={14} className="animate-spin" /> : <ImagePlus size={14} />}{uploading ? "上传中" : "参考图"}
+              {uploading ? <LoaderCircle size={14} className="animate-spin" /> : <ImagePlus size={14} />}{uploading ? "上传中" : "附件"}
             </button>
           )}
           {menu === "reference" && (
             <div className="absolute bottom-full left-0 z-30 mb-2 grid min-w-40 gap-1 rounded-xl border border-neutral-200 bg-white p-1.5 text-sm shadow-lg">
               <button type="button" className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-neutral-100"
-                onClick={() => { setMenu(null); input.current?.click(); }}><Paperclip size={14} />从本地上传图片</button>
+                onClick={() => { setMenu(null); input.current?.click(); }}><Paperclip size={14} />{isAgent ? "上传图片或 Markdown" : "从本地上传图片"}</button>
               <button type="button" disabled={!onPickCanvas} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-neutral-100 disabled:opacity-40"
                 onClick={() => { setMenu(null); onPickCanvas?.(); }}><LayoutGrid size={14} />从画布选择</button>
             </div>
@@ -149,11 +193,20 @@ export function Composer({
         onChange={(event) => setPrompt(event.target.value)}
       />
       {error && <p className="px-1 pb-2 text-xs text-red-700" role="alert">{error}</p>}
-      <div className="flex items-center gap-2">
+      <div className="flex items-end gap-2">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+        {!home && onModeChange && (
+          <ModeMenu mode={mode} disabled={busy || generating} onChange={(value) => {
+            setMenu(null);
+            onModeChange(value);
+          }} />
+        )}
         {home ? (
           <button type="button" disabled={pending} aria-label="上传参考图" className="rounded-lg p-1.5 hover:bg-neutral-100" onClick={() => input.current?.click()}>
             <Plus size={17} />
           </button>
+        ) : mode === "agent" ? (
+          <span className="px-2 text-xs text-neutral-600">Agent自动规划</span>
         ) : (
           <>
             <div className="relative">
@@ -163,7 +216,7 @@ export function Composer({
               </button>
               {menu === "model" && (
                 <div className="absolute bottom-full left-0 z-30 mb-2 grid min-w-40 rounded-xl border border-neutral-200 bg-white p-1.5 text-sm shadow-lg">
-                  {(Object.keys(models) as Model[]).map((model) => {
+                  {manualModels.map((model) => {
                     const Icon = model === "gpt-image-2" ? OpenAI : NanoBanana;
                     return <button key={model} type="button" aria-pressed={model === config.model}
                       className="flex items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-neutral-100 aria-pressed:bg-neutral-100"
@@ -205,8 +258,9 @@ export function Composer({
             </div>
           </>
         )}
-        <button type="submit" aria-label="发送" disabled={!prompt.trim() || busy || selecting}
-          className="ml-auto grid size-8 place-items-center rounded-full bg-neutral-900 text-white hover:bg-neutral-700 disabled:bg-neutral-100 disabled:text-neutral-400">
+        </div>
+        <button type="submit" aria-label="发送" disabled={!maySend || busy || selecting}
+          className="grid size-8 shrink-0 place-items-center rounded-full bg-neutral-900 text-white hover:bg-neutral-700 disabled:bg-neutral-100 disabled:text-neutral-400">
           {pending ? <LoaderCircle className="animate-spin" size={16} /> : <ArrowUp size={17} />}
         </button>
       </div>

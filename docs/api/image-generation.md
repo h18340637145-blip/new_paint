@@ -67,3 +67,13 @@
 | `sync` | 无 | `{ submissions }`，含图片查看地址与各张任务状态 |
 | `retry` | 失败项 `jobId` | `{ submissions }` |
 | `position` | `jobId`、`x`、`y` | `{ ok: true }` |
+
+## 画布 Agent
+
+Agent 使用 `@earendil-works/pi-agent-core` 编排工具，通过 `@earendil-works/pi-ai` 调用具备视觉能力的 `deepseek-flash`。服务端从 `DEEPSEEK_BASE_URL` 和 `DEEPSEEK_API_KEY` 读取接入配置。
+
+- `POST /api/studio/agent` 接收项目编号、消息及按顺序排列的资产编号，返回逐行 JSON 的事件流。服务端保存消息、附件和工具记录。图片查看工具读取私有 Bucket 的实际文件内容。
+- Agent 生成记录保存模型 `gpt-image-2-5-flare`、比例、分辨率和参考图资产顺序。无参考图调用 `gpt-image-2-5-flare-text-to-image`，有参考图调用 `gpt-image-2-5-flare-image-to-image` 并传入 `input_urls`。重试读取原提交记录。
+- 图片和 UTF-8 Markdown 使用现有私有 Bucket。Markdown 预览返回纯文本，下载使用附件响应头。画布放置记录独立于文件，删除节点保留素材。
+
+模型文档见 [DeepSeek 视觉](https://api-docs.deepseek.com/guides/vision/)、[KIE Flare 文生图](https://docs.kie.ai/43283988e0) 和 [KIE Flare 图生图](https://docs.kie.ai/43285205e0)。

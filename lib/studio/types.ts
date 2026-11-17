@@ -23,12 +23,16 @@ export interface CanvasJob {
   asset: ImageAsset | null;
   x: number;
   y: number;
+  canvasHidden?: boolean;
+  canvasWidth?: number | null;
 }
 
 export interface CanvasSubmission {
   id: string;
+  createdAt: string;
   prompt: string;
   config: GenerationConfig;
   reference: ImageAsset | null;
+  references?: ImageAsset[];
   jobs: CanvasJob[];
 }

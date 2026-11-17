@@ -1,5 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { maxMarkdownBytes, markdownFilename, markdownMime } from "./attachment-types";
 import { StudioError } from "./auth";
 import { bucket } from "./projects";
 
@@ -23,10 +24,22 @@ export async function saveImage(
   ownerId: string,
   projectId: string,
   id: string,
-  kind: "reference" | "generated",
+  kind: "reference" | "generated" | "markdown",
   buffer: ArrayBuffer,
+  filename?: string,
 ) {
-  const type = detectImageMime(new Uint8Array(buffer));
+  const bytes = new Uint8Array(buffer);
+  if (kind === "markdown") {
+    if (!filename || !markdownFilename.test(filename) || !bytes.length || bytes.length > maxMarkdownBytes || bytes.includes(0)) {
+      throw new StudioError("请选择不超过 256 KB 的 Markdown 文档。");
+    }
+    try {
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw new StudioError("Markdown 文件须使用 UTF-8 编码。");
+    }
+  }
+  const type = kind === "markdown" ? markdownMime : detectImageMime(bytes);
   if (!type) throw new StudioError("图片格式必须为 JPEG、PNG 或 WebP。");
   const path = `${ownerId}/${projectId}/${id}.${type.split("/")[1]}`;
   const { data: existing, error: checkError } = await database.from("studio_assets")
@@ -42,7 +55,7 @@ export async function saveImage(
     .upload(path, buffer, { contentType: type, upsert: true });
   if (uploadError) throw new StudioError("保存图片失败，请重试。", 503);
   const { error } = await database.from("studio_assets")
-    .upsert({ id, project_id: projectId, path, kind }, { ignoreDuplicates: true });
+    .upsert({ id, project_id: projectId, path, kind, ...(filename ? { filename } : {}) }, { ignoreDuplicates: true });
   const { data: saved } = await database.from("studio_assets")
     .select("id").eq("id", id).eq("project_id", projectId).eq("path", path).eq("kind", kind).maybeSingle();
   if (error || !saved) throw new StudioError("记录图片失败，请重试。", 503);

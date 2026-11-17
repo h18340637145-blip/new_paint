@@ -1,9 +1,11 @@
 export const models = {
   "nano-banana-2": "Nano Banana 2",
   "gpt-image-2": "GPT Image 2",
+  "gpt-image-2-5-flare": "GPT Image 2.5 Flare",
 } as const;
 
 export type Model = keyof typeof models;
+export const manualModels = ["nano-banana-2", "gpt-image-2"] as const;
 export const resolutions = ["1K", "2K", "4K"] as const;
 export type Resolution = (typeof resolutions)[number];
 

@@ -48,16 +48,15 @@ async function kieRequest<T>(path: string, method: "GET" | "POST", body?: object
   return payload.data;
 }
 
-export async function createKieTask(prompt: string, config: GenerationConfig, referenceUrl?: string) {
-  const isGpt = config.model === "gpt-image-2";
-  const model = isGpt
-    ? (referenceUrl ? "gpt-image-2-image-to-image" : "gpt-image-2-text-to-image")
-    : "nano-banana-2";
+export async function createKieTask(prompt: string, config: GenerationConfig, referenceUrls: string[] = []) {
+  const isNano = config.model === "nano-banana-2";
+  const model = isNano ? config.model
+    : `${config.model}-${referenceUrls.length ? "image-to-image" : "text-to-image"}`;
   const input = {
     prompt,
     aspect_ratio: config.aspectRatio,
     resolution: config.resolution,
-    ...(referenceUrl ? { [isGpt ? "input_urls" : "image_input"]: [referenceUrl] } : {}),
+    ...(referenceUrls.length ? { [isNano ? "image_input" : "input_urls"]: referenceUrls } : {}),
   };
   const data = await kieRequest<{ taskId?: string }>("/api/v1/jobs/createTask", "POST", { model, input });
   if (!data.taskId) throw new KieError("生图服务未返回任务编号。", true);

@@ -16,6 +16,8 @@ type RequestRow = {
   aspect_ratio: string;
   image_count: number;
   reference_id: string | null;
+  ordered_reference_ids?: string[] | null;
+  created_at?: string;
 };
 type TaskRow = {
   id: string;
@@ -29,6 +31,8 @@ type TaskRow = {
   position_x: number;
   position_y: number;
   checked_at: string | null;
+  canvas_hidden?: boolean;
+  canvas_width?: number | null;
 };
 
 function configOf(row: RequestRow): GenerationConfig {
@@ -48,12 +52,13 @@ function latestJobs(rows: TaskRow[]) {
 export async function ensureSubmission(
   database: SupabaseClient,
   project: Project,
-  input: { id: string; prompt: string; config: GenerationConfig; referenceId: string | null },
+  input: { id: string; prompt: string; config: GenerationConfig; referenceId: string | null; orderedReferenceIds?: string[] },
 ) {
   const row: RequestRow = {
     id: input.id, project_id: project.id, prompt: input.prompt, model: input.config.model,
     resolution: input.config.resolution, aspect_ratio: input.config.aspectRatio,
     image_count: input.config.count, reference_id: input.referenceId,
+    ...(input.orderedReferenceIds ? { ordered_reference_ids: input.orderedReferenceIds } : {}),
   };
   const { error: insertError } = await database.from("studio_submissions")
     .upsert(row, { onConflict: "id", ignoreDuplicates: true });
@@ -61,7 +66,10 @@ export async function ensureSubmission(
   const { data: saved, error } = await database.from("studio_submissions").select("*")
     .eq("id", row.id).eq("project_id", project.id).single<RequestRow>();
   if (error || !saved) throw new StudioError("提交编号已被占用。", 409);
-  if (Object.entries(row).some(([key, value]) => saved[key as keyof RequestRow] !== value)) {
+  if (Object.entries(row).some(([key, value]) => {
+    const existing = saved[key as keyof RequestRow];
+    return Array.isArray(value) ? JSON.stringify(existing) !== JSON.stringify(value) : existing !== value;
+  })) {
     throw new StudioError("这次提交已经记录，请刷新项目查看状态。", 409);
   }
 
@@ -99,14 +107,16 @@ export async function startPending(
       const { data: request, error: requestError } = await database.from("studio_submissions")
         .select("*").eq("id", job.submission_id).single<RequestRow>();
       if (requestError || !request) throw new StudioError("无法读取原生图请求。", 503);
-      let url: string | undefined;
-      if (request.reference_id) {
-        const { data: image, error: imageError } = await database.from("studio_assets").select("path")
-          .eq("project_id", project.id).eq("id", request.reference_id).single();
-        if (imageError || !image) throw new StudioError("参考图已不可用。", 404);
-        url = await signImage(database, image.path, 3600);
-      }
-      providerId = await createKieTask(request.prompt, configOf(request), url);
+      const ids = request.ordered_reference_ids ?? (request.reference_id ? [request.reference_id] : []);
+      const urls = await Promise.all(ids.map(async (id) => {
+        const { data: image, error: imageError } = await database.from("studio_assets").select("path,kind")
+          .eq("project_id", project.id).eq("id", id).single();
+        if (imageError || !image || !["reference", "generated"].includes(image.kind)) {
+          throw new StudioError("参考图已不可用。", 404);
+        }
+        return signImage(database, image.path, 3600);
+      }));
+      providerId = await createKieTask(request.prompt, configOf(request), urls);
     } catch (failure) {
       const uncertain = failure instanceof KieError && failure.uncertain;
       const message = failure instanceof KieError || failure instanceof StudioError
@@ -185,6 +195,7 @@ export async function readCanvas(database: SupabaseClient, projectId: string): P
   const jobs = latestJobs(jobResult.data);
   const ids = new Set([
     ...requests.data.map((row) => row.reference_id),
+    ...requests.data.flatMap((row) => row.ordered_reference_ids ?? []),
     ...jobs.map((row) => row.asset_id),
   ]);
   const images = new Map<string, ImageAsset>();
@@ -198,13 +209,18 @@ export async function readCanvas(database: SupabaseClient, projectId: string): P
     }
   }));
   return requests.data.map((row) => ({
-    id: row.id, prompt: row.prompt, config: configOf(row),
+    id: row.id, createdAt: row.created_at ?? "", prompt: row.prompt, config: configOf(row),
     reference: row.reference_id ? images.get(row.reference_id) ?? null : null,
+    references: row.ordered_reference_ids?.flatMap((id) => {
+      const image = images.get(id);
+      return image ? [image] : [];
+    }),
     jobs: jobs.filter((job) => job.submission_id === row.id)
       .sort((a, b) => a.slot - b.slot).map((job): CanvasJob => ({
         id: job.id, slot: job.slot, attempt: job.attempt, status: job.status,
         error: job.error_message, asset: job.asset_id ? images.get(job.asset_id) ?? null : null,
         x: job.position_x, y: job.position_y,
+        canvasHidden: job.canvas_hidden, canvasWidth: job.canvas_width,
       })),
   }));
 }
