@@ -4,10 +4,12 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 
 export async function logIn(formData: FormData) {
+  const toProfile = formData.get("next") === "profile";
+  const next = toProfile ? "&next=profile" : "";
   const email = formData.get("email");
   const password = formData.get("password");
   if (typeof email !== "string" || !email.trim() || typeof password !== "string" || !password) {
-    redirect("/auth/login?error=required");
+    redirect(`/auth/login?error=required${next}`);
   }
 
   let code: string | undefined;
@@ -23,8 +25,8 @@ export async function logIn(formData: FormData) {
   }
 
   if (code === "invalid_credentials" || code === "email_not_confirmed") {
-    redirect(`/auth/login?error=${code}`);
+    redirect(`/auth/login?error=${code}${next}`);
   }
-  if (code) redirect("/auth/login?error=unavailable");
-  redirect("/protected");
+  if (code) redirect(`/auth/login?error=unavailable${next}`);
+  redirect(toProfile ? "/profile" : "/protected");
 }

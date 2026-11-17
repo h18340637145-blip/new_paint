@@ -9,7 +9,8 @@ export async function updateSession(request: NextRequest) {
 
   // If the env vars are not set, skip proxy check. You can remove this
   // once you setup the project.
-  if (!hasEnvVars) {
+  if (!hasEnvVars || request.nextUrl.pathname === "/api/checkout/providers/zpay/webhook"
+    || request.nextUrl.pathname === "/checkout/return") {
     return supabaseResponse;
   }
 
@@ -17,7 +18,7 @@ export async function updateSession(request: NextRequest) {
   // variable. Always create a new one on each request.
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+    (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)!,
     {
       cookies: {
         encode: "tokens-only",
@@ -53,11 +54,12 @@ export async function updateSession(request: NextRequest) {
     !user &&
     !request.nextUrl.pathname.startsWith("/api/") &&
     !request.nextUrl.pathname.startsWith("/login") &&
+    request.nextUrl.pathname !== "/signin" &&
     !request.nextUrl.pathname.startsWith("/auth")
   ) {
     // no user, potentially respond by redirecting the user to the login page
     const url = request.nextUrl.clone();
-    url.pathname = "/auth/login";
+    url.pathname = request.nextUrl.pathname === "/profile" ? "/signin" : "/auth/login";
     return NextResponse.redirect(url);
   }
 

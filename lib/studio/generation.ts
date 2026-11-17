@@ -49,37 +49,53 @@ function latestJobs(rows: TaskRow[]) {
   return [...latest.values()];
 }
 
-export async function ensureSubmission(
-  database: SupabaseClient,
-  project: Project,
-  input: { id: string; prompt: string; config: GenerationConfig; referenceId: string | null; orderedReferenceIds?: string[] },
-) {
-  const row: RequestRow = {
+type SubmissionInput = {
+  id: string;
+  prompt: string;
+  config: GenerationConfig;
+  referenceId: string | null;
+  orderedReferenceIds?: string[];
+};
+
+export async function ensureSubmission(database: SupabaseClient, project: Project, input: SubmissionInput) {
+  await ensureSubmissions(database, project, [input]);
+}
+
+export async function ensureSubmissions(database: SupabaseClient, project: Project, inputs: SubmissionInput[]) {
+  const rows: RequestRow[] = inputs.map((input) => ({
     id: input.id, project_id: project.id, prompt: input.prompt, model: input.config.model,
     resolution: input.config.resolution, aspect_ratio: input.config.aspectRatio,
     image_count: input.config.count, reference_id: input.referenceId,
-    ...(input.orderedReferenceIds ? { ordered_reference_ids: input.orderedReferenceIds } : {}),
-  };
+    ordered_reference_ids: input.orderedReferenceIds ?? null,
+  }));
+  // 同一批次使用一个数据库语句，额度不足时整批回滚。
   const { error: insertError } = await database.from("studio_submissions")
-    .upsert(row, { onConflict: "id", ignoreDuplicates: true });
+    .upsert(rows, { onConflict: "id", ignoreDuplicates: true });
+  if (insertError?.code === "PZ001") throw new StudioError("本月剩余生图额度不足，可在个人中心查看额度或订阅 Pro。", 429);
   if (insertError) throw new StudioError("无法记录本次生图请求。", 503);
+
   const { data: saved, error } = await database.from("studio_submissions").select("*")
-    .eq("id", row.id).eq("project_id", project.id).single<RequestRow>();
-  if (error || !saved) throw new StudioError("提交编号已被占用。", 409);
-  if (Object.entries(row).some(([key, value]) => {
-    const existing = saved[key as keyof RequestRow];
-    return Array.isArray(value) ? JSON.stringify(existing) !== JSON.stringify(value) : existing !== value;
-  })) {
-    throw new StudioError("这次提交已经记录，请刷新项目查看状态。", 409);
+    .eq("project_id", project.id).in("id", rows.map((row) => row.id)).returns<RequestRow[]>();
+  if (error || saved.length !== rows.length) throw new StudioError("提交编号已被占用。", 409);
+  const byId = new Map(saved.map((row) => [row.id, row]));
+  for (const row of rows) {
+    const persisted = byId.get(row.id)!;
+    if (Object.entries(row).some(([key, value]) => {
+      const existing = persisted[key as keyof RequestRow];
+      return Array.isArray(value)
+        ? JSON.stringify(existing) !== JSON.stringify(value)
+        : existing !== value;
+    })) throw new StudioError("这次提交已经记录，请刷新项目查看状态。", 409);
   }
 
   const { count, error: countError } = await database.from("studio_submissions")
     .select("id", { count: "exact", head: true }).eq("project_id", project.id);
   if (countError) throw new StudioError("无法读取当前项目的生图记录。", 503);
-  const requests = Array.from({ length: saved.image_count }, (_, slot) => ({
-    project_id: project.id, submission_id: saved.id, slot,
-    position_x: 80 + slot * 365, position_y: 80 + Math.max(0, (count ?? 1) - 1) * 390,
-  }));
+  const offset = Math.max(0, (count ?? rows.length) - rows.length);
+  const requests = rows.flatMap((row, index) => Array.from({ length: row.image_count }, (_, slot) => ({
+    project_id: project.id, submission_id: row.id, slot,
+    position_x: 80 + slot * 365, position_y: 80 + (offset + index) * 390,
+  })));
   const { error: jobError } = await database.from("studio_jobs")
     .upsert(requests, { onConflict: "submission_id,slot,attempt", ignoreDuplicates: true });
   if (jobError) throw new StudioError("无法创建图片任务，请重试。", 503);

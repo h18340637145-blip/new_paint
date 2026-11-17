@@ -20,8 +20,8 @@ const loginErrors = new Map([
 ]);
 
 export function LoginForm({
-  className, errorCode, ...props
-}: React.ComponentPropsWithoutRef<"div"> & { errorCode?: string }) {
+  className, errorCode, next, ...props
+}: React.ComponentPropsWithoutRef<"div"> & { errorCode?: string; next?: "profile" }) {
   const error = errorCode ? loginErrors.get(errorCode) : undefined;
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
@@ -34,6 +34,7 @@ export function LoginForm({
         </CardHeader>
         <CardContent>
           <form action={logIn}>
+            {next && <input type="hidden" name="next" value={next} />}
             <div className="flex flex-col gap-6">
               <div className="grid gap-2">
                 <Label htmlFor="email">邮箱</Label>

@@ -1,5 +1,5 @@
 import "server-only";
-import { createClient as createAdminClient } from "@supabase/supabase-js";
+import { createServerAdminClient } from "@/lib/supabase/admin";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 
@@ -10,13 +10,11 @@ export class StudioError extends Error {
 }
 
 export function studioAdmin() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new StudioError("工作台服务端尚未配置。", 503);
-
-  return createAdminClient(url, key, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
+  try {
+    return createServerAdminClient();
+  } catch {
+    throw new StudioError("工作台服务端尚未配置。", 503);
+  }
 }
 
 export async function requireStudioMember() {

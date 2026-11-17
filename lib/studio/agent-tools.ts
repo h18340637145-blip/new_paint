@@ -1,7 +1,7 @@
 import "server-only";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { ensureSubmission, startPending } from "./generation";
+import { ensureSubmissions, startPending } from "./generation";
 import { maxPromptLength } from "./models";
 import { bucket, uuidPattern } from "./projects";
 import { detectImageMime } from "./storage";
@@ -95,15 +95,6 @@ export function createStudioTools(database: SupabaseClient, project: Project, co
         const ratio = cover ? "16:9" : value.aspectRatio ?? "auto";
         if (typeof ratio !== "string" || !choices.includes(ratio)) throw new Error("不支持这个图片比例。");
         const aspectRatio = ratio;
-        async function prepare(prompt: string) {
-          const id = crypto.randomUUID();
-          await ensureSubmission(database, project, {
-            id, prompt, referenceId: null, orderedReferenceIds,
-            config: { model: "gpt-image-2-5-flare", count: 1, resolution: "1K", aspectRatio },
-          });
-          return id;
-        }
-
         async function submit(id: string) {
           await startPending(database, project, id);
           const { data, error } = await database.from("studio_jobs").select("status,error_message")
@@ -114,19 +105,17 @@ export function createStudioTools(database: SupabaseClient, project: Project, co
         }
 
         const prompts = inputs.map((input: string) => input.trim());
-        if (!cover) return json(await submit(await prepare(prompts[0])));
-        if (coverSubmitted) throw new Error("本轮封面任务已提交，请查看任务状态。");
+        if (cover && coverSubmitted) throw new Error("本轮封面任务已提交，请查看任务状态。");
+
+        const submissions = prompts.map((prompt: string) => ({
+          id: crypto.randomUUID(), prompt, referenceId: null, orderedReferenceIds,
+          config: { model: "gpt-image-2-5-flare", count: 1, resolution: "1K", aspectRatio } as const,
+        }));
+        await ensureSubmissions(database, project, submissions);
+        if (!cover) return json(await submit(submissions[0].id));
         coverSubmitted = true;
         cover.onSubmit();
-        // 顺序分配画布位置，再并行提交模型任务。
-        const preparations = [];
-        for (const prompt of prompts) {
-          preparations.push((await Promise.allSettled([prepare(prompt)]))[0]);
-        }
-        const results = await Promise.allSettled(preparations.map(async (entry) => {
-          if (entry.status === "rejected") throw entry.reason;
-          return submit(entry.value);
-        }));
+        const results = await Promise.allSettled(submissions.map(({ id }) => submit(id)));
         return json(results.map((result, index) => result.status === "fulfilled"
           ? { cover: index + 1, ...result.value }
           : { cover: index + 1, status: "failed", error: result.reason instanceof Error ? result.reason.message : "提交失败。" }));
