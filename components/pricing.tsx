@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { submitZpayForm } from "@/lib/billing/zpay-client";
 
 type Plan = {
   id: string;
@@ -34,18 +35,7 @@ export function Pricing({ plan, available }: { plan: Plan; available: boolean })
       }
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "创建支付链接失败。");
-      if (!form.current || payload.action !== "https://zpayz.cn/submit.php") {
-        throw new Error("支付链接无效。");
-      }
-      const fields = Object.entries(payload.fields as Record<string, string>).map(([name, value]) => {
-        const input = document.createElement("input");
-        input.type = "hidden";
-        input.name = name;
-        input.value = value;
-        return input;
-      });
-      form.current.replaceChildren(...fields);
-      form.current.requestSubmit();
+      submitZpayForm(form.current, payload);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "支付服务暂不可用。");
     } finally {
@@ -57,28 +47,49 @@ export function Pricing({ plan, available }: { plan: Plan; available: boolean })
   return (
     <div className="space-y-4">
       <form ref={form} action="https://zpayz.cn/submit.php" method="post" hidden />
-      <label className="inline-flex items-center gap-3 text-sm text-neutral-700">
-        支付方式
-        <select value={method} onChange={(event) => setMethod(event.target.value)} disabled={!!pending}
-          className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-neutral-950">
-          <option value="alipay">支付宝</option>
-          <option value="wxpay">微信支付</option>
-        </select>
-      </label>
-      <div className="flex flex-col gap-3 rounded-xl border border-neutral-200 p-4">
-        <h3 className="font-medium">{plan.name}</h3>
-        <p className="text-xl font-semibold tabular-nums">
-          ¥{(plan.amount / 100).toFixed(2)}
-          <span className="ml-1 text-sm font-normal text-neutral-500">/ 月</span>
+      <article className="flex flex-col gap-5 rounded-2xl border border-neutral-200/90 bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-base font-semibold text-neutral-950">{plan.name}</h3>
+            <span className="inline-flex items-center rounded-full bg-neutral-100 px-2.5 py-0.5 text-xs font-medium text-neutral-700">
+              按月订阅
+            </span>
+          </div>
+          <p className="text-2xl font-semibold tracking-tight tabular-nums text-neutral-950">
+            ¥{(plan.amount / 100).toFixed(2)}
+            <span className="ml-1 text-sm font-normal text-neutral-500">/ 月</span>
+          </p>
+          <p className="text-sm text-neutral-600">每月 50 张图。手动续订，提前续订从当前到期日开始顺延。</p>
+        </div>
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <label className="inline-flex items-center gap-2.5 text-sm text-neutral-700">
+            <span className="shrink-0">支付方式</span>
+            <select
+              value={method}
+              onChange={(event) => setMethod(event.target.value)}
+              disabled={!!pending}
+              className="min-h-[44px] rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-950 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 sm:min-h-9"
+            >
+              <option value="alipay">支付宝</option>
+              <option value="wxpay">微信支付</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            disabled={!available || !!pending}
+            onClick={() => void purchase(plan.id)}
+            className="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-neutral-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-500 sm:min-h-9"
+          >
+            {pending ? "正在创建订单…" : available ? "订阅或续订" : "支付暂未开放"}
+          </button>
+        </div>
+      </article>
+      {error && (
+        <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-sm text-red-700">
+          {error}
         </p>
-        <p className="text-sm text-neutral-600">每月 50 张图。手动续订，提前续订从当前到期日开始顺延。</p>
-        <button type="button" disabled={!available || !!pending}
-          onClick={() => void purchase(plan.id)}
-          className="self-start rounded-lg bg-neutral-900 px-4 py-2 text-sm text-white disabled:bg-neutral-100 disabled:text-neutral-500">
-          {pending ? "正在创建订单…" : available ? "订阅或续订" : "支付暂未开放"}
-        </button>
-      </div>
-      {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
+      )}
     </div>
   );
 }

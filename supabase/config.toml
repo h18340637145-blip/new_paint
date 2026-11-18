@@ -1,0 +1,8 @@
+project_id = "new-paint"
+
+# 下单函数在内部验证 Supabase 用户，回调函数验证 ZPAY 商户签名。
+[functions.zpay-checkout]
+verify_jwt = false
+
+[functions.zpay-webhook]
+verify_jwt = false

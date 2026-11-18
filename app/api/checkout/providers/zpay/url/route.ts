@@ -1,5 +1,5 @@
-import { checkoutConfiguration, proPlan } from "@/lib/billing/plans";
-import { orderNumber, paymentMethods, signZpay, zpaySubmitUrl } from "@/lib/billing/zpay";
+import { checkoutConfiguration, proPlan, zpayEdgeCheckout } from "@/lib/billing/plans";
+import { checkoutPayload, orderNumber, paymentMethods } from "@/supabase/functions/_shared/zpay";
 import { createServerAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -18,34 +18,35 @@ export async function POST(request: Request) {
     const type = paymentMethods.find((method) => method === input?.method);
     const plan = proPlan;
     if (input?.planId !== plan.id || !type) return Response.json({ error: "请选择有效的商品和支付方式。" }, { status: 400 });
+    const edge = zpayEdgeCheckout();
+    if (edge) {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return Response.json({ error: "请先登录。" }, { status: 401 });
+      const response = await fetch(edge.url, {
+        method: "POST",
+        headers: {
+          apikey: edge.apiKey,
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ planId: plan.id, method: type }),
+        cache: "no-store",
+        redirect: "error",
+        signal: AbortSignal.timeout(10_000),
+      });
+      return Response.json(await response.json(), {
+        status: response.status, headers: { "Cache-Control": "no-store" },
+      });
+    }
     const config = checkoutConfiguration();
-    if (!config) {
+    if (!config || process.env.ZPAY_BACKEND === "supabase") {
       return Response.json({ error: "该商品暂未开放支付。" }, { status: 503 });
     }
-
-    const order = orderNumber();
-    const fields = {
-      pid: config.pid,
-      name: plan.name,
-      money: (plan.amount / 100).toFixed(2),
-      type,
-      out_trade_no: order,
-      notify_url: `${config.origin}/api/checkout/providers/zpay/webhook`,
-      return_url: `${config.origin}/checkout/return`,
-    };
-    const { error: insertError } = await createServerAdminClient().from("zpay_transactions").insert({
-      user_id: userId, out_trade_no: order, zpay_pid: config.pid, payment_type: type,
-      product_id: plan.id, product_name: plan.name, amount: fields.money,
-      is_subscription: true, subscription_period: "monthly",
-    });
+    const { order, result } = checkoutPayload(orderNumber(), type, config, `${config.origin}/api/checkout/providers/zpay/webhook`);
+    const { error: insertError } = await createServerAdminClient().from("zpay_transactions")
+      .insert({ ...order, user_id: userId });
     if (insertError) return Response.json({ error: "订单创建失败，请稍后重试。" }, { status: 503 });
-
-    const signedFields = { ...fields, sign: signZpay(fields, config.key), sign_type: "MD5" };
-    return Response.json({
-      url: `${zpaySubmitUrl}?${new URLSearchParams(signedFields)}`,
-      action: zpaySubmitUrl,
-      fields: signedFields,
-    }, { headers: { "Cache-Control": "no-store" } });
+    return Response.json(result, { headers: { "Cache-Control": "no-store" } });
   } catch {
     return Response.json({ error: "支付服务暂不可用。" }, { status: 503 });
   }
