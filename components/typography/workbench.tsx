@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bold,
   BookOpen,
@@ -20,22 +20,30 @@ import {
   Palette,
   Quote,
   Smartphone,
+  Sparkles,
   Table2,
   Upload,
 } from "lucide-react";
+import { FromCanvasDialog } from "@/components/typography/from-canvas-dialog";
+import { PublishCopyDialog } from "@/components/typography/publish-copy-dialog";
+import { StructuredDraftEditor } from "@/components/typography/structured-editor";
 import { StylePanel } from "@/components/typography/style-panel";
 import { ThemePicker } from "@/components/typography/theme-picker";
 import {
   cloneStyleConfig,
   countArticleStats,
   createDefaultPersistedState,
+  extractDraftImageAssetIds,
   getSubTemplate,
   getSubTemplatesForTheme,
   migratePersistedState,
+  renderStructuredArticleHtml,
   renderWechatHtml,
+  structuredDraftToPlainText,
   TYPOGRAPHY_STORAGE_KEY,
   TYPOGRAPHY_SUBTEMPLATES,
 } from "@/lib/typography/templates";
+import type { StructuredArticleDraft } from "@/lib/typography/structured";
 import type {
   ColorPalette,
   TemplateStyleConfig,
@@ -44,9 +52,44 @@ import type {
   TypographySubTemplate,
 } from "@/lib/typography/types";
 
-export function TypographyWorkbench() {
+const PUBLIC_COPY_CONSENT_KEY = "new_paint_public_image_copy_ack_v1";
+
+async function writeWechatClipboard(html: string, plainText: string) {
+  if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+    const item = new ClipboardItem({
+      "text/html": new Blob([html], { type: "text/html" }),
+      "text/plain": new Blob([plainText], { type: "text/plain" }),
+    });
+    await navigator.clipboard.write([item]);
+  } else {
+    await navigator.clipboard.writeText(html);
+  }
+}
+
+export function TypographyWorkbench({
+  initialProjectId = null,
+  initialSnapshotId = null,
+  initialDraftId = null,
+}: {
+  initialProjectId?: string | null;
+  initialSnapshotId?: string | null;
+  initialDraftId?: string | null;
+}) {
   const [state, setState] = useState<TypographyPersistedState>(() => createDefaultPersistedState());
   const [selectedThemeId, setSelectedThemeId] = useState<ThemeId>(TYPOGRAPHY_SUBTEMPLATES[0].themeId);
+  const [editorMode, setEditorMode] = useState<"markdown" | "draft">("markdown");
+  const [activeDraft, setActiveDraft] = useState<StructuredArticleDraft | null>(null);
+  const [draftImageUrls, setDraftImageUrls] = useState<Record<string, string>>({});
+  const [draftDirty, setDraftDirty] = useState(false);
+  const [draftSaving, setDraftSaving] = useState(false);
+  const [conflictError, setConflictError] = useState("");
+
+  const [fromCanvasOpen, setFromCanvasOpen] = useState(Boolean(initialProjectId || initialSnapshotId));
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [publishingImages, setPublishingImages] = useState(false);
+  const [publishError, setPublishError] = useState("");
+  const [hasConsentedPublicImages, setHasConsentedPublicImages] = useState(false);
+
   const [showStylePanel, setShowStylePanel] = useState(true);
   const [previewDevice, setPreviewDevice] = useState<"mobile" | "desktop">("mobile");
   const [confirmLoadSample, setConfirmLoadSample] = useState(false);
@@ -55,14 +98,98 @@ export function TypographyWorkbench() {
   const [copyError, setCopyError] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const draftRef = useRef<StructuredArticleDraft | null>(null);
+  draftRef.current = activeDraft;
+
+  const flashStatus = useCallback((msg: string) => {
+    setStatusMessage(msg);
+    window.setTimeout(() => {
+      setStatusMessage((curr) => (curr === msg ? "" : curr));
+    }, 2400);
+  }, []);
+
+  const openDraftById = useCallback(
+    async (draftId: string) => {
+      const res = await fetch(`/api/typography/drafts/${encodeURIComponent(draftId)}`, { cache: "no-store" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.draft) {
+        throw new Error(data.error || "加载排版稿失败。");
+      }
+      const loaded = data.draft as StructuredArticleDraft;
+      setActiveDraft(loaded);
+      setDraftImageUrls((data.imageUrls ?? {}) as Record<string, string>);
+      setDraftDirty(false);
+      setConflictError("");
+      setEditorMode("draft");
+      setSelectedThemeId(getSubTemplate(loaded.subTemplateId).themeId);
+      const url = new URL(window.location.href);
+      url.searchParams.set("draftId", loaded.id);
+      window.history.replaceState(null, "", url.toString());
+      flashStatus(`已打开排版稿「${loaded.title}」`);
+    },
+    [flashStatus],
+  );
 
   useEffect(() => {
     const raw = window.localStorage.getItem(TYPOGRAPHY_STORAGE_KEY);
-    if (!raw) return;
-    const migrated = migratePersistedState(raw);
-    setState(migrated);
-    setSelectedThemeId(getSubTemplate(migrated.activeSubTemplateId).themeId);
-  }, []);
+    if (raw) {
+      const migrated = migratePersistedState(raw);
+      setState(migrated);
+      setSelectedThemeId(getSubTemplate(migrated.activeSubTemplateId).themeId);
+    }
+    if (window.localStorage.getItem(PUBLIC_COPY_CONSENT_KEY) === "1") {
+      setHasConsentedPublicImages(true);
+    }
+    if (initialDraftId) {
+      void openDraftById(initialDraftId).catch((err: Error) => setCopyError(err.message));
+    }
+  }, [initialDraftId, openDraftById]);
+
+  const saveDraftToServer = useCallback(async () => {
+    const current = draftRef.current;
+    if (!current || draftSaving) return;
+    setDraftSaving(true);
+    try {
+      const res = await fetch(`/api/typography/drafts/${encodeURIComponent(current.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: current.projectId,
+          expectedVersion: current.version,
+          title: current.title,
+          subTemplateId: current.subTemplateId,
+          templateStyle: current.templateStyle,
+          documentStyle: current.documentStyle,
+          blocks: current.blocks,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409) {
+        setConflictError(data.error || "该排版稿已在其他窗口修改，请刷新加载最新版本。");
+        return;
+      }
+      if (!res.ok || !data.draft) {
+        throw new Error(data.error || "保存排版稿失败。");
+      }
+      const saved = data.draft as StructuredArticleDraft;
+      setActiveDraft((prev) => (prev && prev.id === saved.id ? { ...prev, version: saved.version, updatedAt: saved.updatedAt } : prev));
+      setDraftDirty(false);
+      setConflictError("");
+    } catch (err) {
+      setCopyError(err instanceof Error ? err.message : "保存失败。");
+    } finally {
+      setDraftSaving(false);
+    }
+  }, [draftSaving]);
+
+  // Auto-save draft changes after 1200ms idle
+  useEffect(() => {
+    if (editorMode !== "draft" || !draftDirty || !activeDraft || conflictError) return;
+    const timer = window.setTimeout(() => {
+      void saveDraftToServer();
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [editorMode, draftDirty, activeDraft, conflictError, saveDraftToServer]);
 
   function commitState(updater: (prev: TypographyPersistedState) => TypographyPersistedState) {
     setState((prev) => {
@@ -76,20 +203,30 @@ export function TypographyWorkbench() {
     });
   }
 
-  function flashStatus(msg: string) {
-    setStatusMessage(msg);
-    window.setTimeout(() => {
-      setStatusMessage((curr) => (curr === msg ? "" : curr));
-    }, 2400);
-  }
+  const isDraftMode = editorMode === "draft" && activeDraft !== null;
+  const activeSub = getSubTemplate(
+    isDraftMode ? activeDraft.subTemplateId : state.activeSubTemplateId,
+  );
+  const activeStyle = isDraftMode
+    ? activeDraft.templateStyle
+    : state.styleOverrides[activeSub.id] ?? activeSub.defaultStyle;
 
-  const activeSub = getSubTemplate(state.activeSubTemplateId);
-  const activeStyle = state.styleOverrides[activeSub.id] ?? activeSub.defaultStyle;
+  function mutateDraft(updater: (prev: StructuredArticleDraft) => StructuredArticleDraft) {
+    setActiveDraft((prev) => (prev ? updater(prev) : prev));
+    setDraftDirty(true);
+  }
 
   function handleSelectTheme(themeId: ThemeId) {
     setSelectedThemeId(themeId);
     const firstSub = getSubTemplatesForTheme(themeId)[0];
-    if (firstSub && firstSub.id !== state.activeSubTemplateId) {
+    if (!firstSub) return;
+    if (isDraftMode) {
+      mutateDraft((prev) => ({
+        ...prev,
+        subTemplateId: firstSub.id,
+        templateStyle: cloneStyleConfig(firstSub.defaultStyle),
+      }));
+    } else if (firstSub.id !== state.activeSubTemplateId) {
       commitState((prev) => ({ ...prev, activeSubTemplateId: firstSub.id }));
       setConfirmLoadSample(false);
     }
@@ -97,8 +234,38 @@ export function TypographyWorkbench() {
 
   function handleSelectSubTemplate(sub: TypographySubTemplate) {
     setSelectedThemeId(sub.themeId);
-    commitState((prev) => ({ ...prev, activeSubTemplateId: sub.id }));
-    setConfirmLoadSample(false);
+    if (isDraftMode) {
+      mutateDraft((prev) => ({
+        ...prev,
+        subTemplateId: sub.id,
+        templateStyle: cloneStyleConfig(sub.defaultStyle),
+      }));
+    } else {
+      commitState((prev) => ({ ...prev, activeSubTemplateId: sub.id }));
+      setConfirmLoadSample(false);
+    }
+  }
+
+  function updateActiveStyle(updater: (prev: TemplateStyleConfig) => TemplateStyleConfig) {
+    if (isDraftMode) {
+      mutateDraft((prev) => ({
+        ...prev,
+        templateStyle: updater(cloneStyleConfig(prev.templateStyle)),
+      }));
+      return;
+    }
+    commitState((prev) => {
+      const sub = getSubTemplate(prev.activeSubTemplateId);
+      const current = prev.styleOverrides[sub.id] ?? sub.defaultStyle;
+      const updated = updater(cloneStyleConfig(current));
+      return {
+        ...prev,
+        styleOverrides: {
+          ...prev.styleOverrides,
+          [sub.id]: updated,
+        },
+      };
+    });
   }
 
   function handleSelectPalette(palette: ColorPalette) {
@@ -120,22 +287,16 @@ export function TypographyWorkbench() {
     }));
   }
 
-  function updateActiveStyle(updater: (prev: TemplateStyleConfig) => TemplateStyleConfig) {
-    commitState((prev) => {
-      const sub = getSubTemplate(prev.activeSubTemplateId);
-      const current = prev.styleOverrides[sub.id] ?? sub.defaultStyle;
-      const updated = updater(cloneStyleConfig(current));
-      return {
-        ...prev,
-        styleOverrides: {
-          ...prev.styleOverrides,
-          [sub.id]: updated,
-        },
-      };
-    });
-  }
-
   function handleResetTemplateDefault() {
+    if (isDraftMode) {
+      const def = getSubTemplate(activeDraft.subTemplateId).defaultStyle;
+      mutateDraft((prev) => ({
+        ...prev,
+        templateStyle: cloneStyleConfig(def),
+      }));
+      flashStatus(`已恢复「${activeSub.name}」默认样式`);
+      return;
+    }
     commitState((prev) => {
       const nextOverrides = { ...prev.styleOverrides };
       delete nextOverrides[activeSub.id];
@@ -166,7 +327,8 @@ export function TypographyWorkbench() {
 
   function handleRequestLoadSample() {
     const trimmed = state.content.trim();
-    const isUneditedSample = !state.hasEditedContent || trimmed.length === 0 || state.content === activeSub.sampleMarkdown;
+    const isUneditedSample =
+      !state.hasEditedContent || trimmed.length === 0 || state.content === activeSub.sampleMarkdown;
     if (isUneditedSample) {
       applyCurrentSample();
       return;
@@ -190,11 +352,12 @@ export function TypographyWorkbench() {
   }
 
   function exportMarkdown() {
-    const blob = new Blob([state.content], { type: "text/markdown;charset=utf-8" });
+    const text = isDraftMode ? structuredDraftToPlainText(activeDraft) : state.content;
+    const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${activeSub.name}.md`;
+    link.download = `${isDraftMode ? activeDraft.title : activeSub.name}.md`;
     link.click();
     URL.revokeObjectURL(url);
   }
@@ -204,28 +367,90 @@ export function TypographyWorkbench() {
     event.target.value = "";
     if (!file) return;
     const text = await file.text();
+    setEditorMode("markdown");
     handleContentChange(text);
     flashStatus(`已导入 ${file.name}`);
   }
 
-  const previewHtml = useMemo(
-    () => renderWechatHtml(state.content, activeStyle),
-    [state.content, activeStyle],
-  );
-  const stats = useMemo(() => countArticleStats(state.content), [state.content]);
+  const previewHtml = useMemo(() => {
+    if (isDraftMode) {
+      return renderStructuredArticleHtml(activeDraft, draftImageUrls);
+    }
+    return renderWechatHtml(state.content, activeStyle);
+  }, [isDraftMode, activeDraft, draftImageUrls, state.content, activeStyle]);
 
-  async function copyForWechat() {
+  const stats = useMemo(
+    () => countArticleStats(isDraftMode ? structuredDraftToPlainText(activeDraft) : state.content),
+    [isDraftMode, activeDraft, state.content],
+  );
+
+  async function executeDraftCopyWithPublicImages() {
+    if (!activeDraft) return;
+    setPublishingImages(true);
+    setPublishError("");
     setCopyError("");
     try {
-      if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
-        const item = new ClipboardItem({
-          "text/html": new Blob([previewHtml], { type: "text/html" }),
-          "text/plain": new Blob([state.content], { type: "text/plain" }),
-        });
-        await navigator.clipboard.write([item]);
-      } else {
-        await navigator.clipboard.writeText(previewHtml);
+      const assetIds = extractDraftImageAssetIds(activeDraft.blocks);
+      let publicUrls: Record<string, string> = {};
+
+      if (assetIds.length > 0) {
+        const res = await fetch(
+          `/api/typography/drafts/${encodeURIComponent(activeDraft.id)}/publish-images`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              projectId: activeDraft.projectId,
+              blocks: activeDraft.blocks,
+            }),
+          },
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.images) {
+          throw new Error(data.error || "公开图片副本准备失败，请重试。");
+        }
+        publicUrls = data.images as Record<string, string>;
+        for (const id of assetIds) {
+          if (!publicUrls[id]) {
+            throw new Error("部分文章配图尚未准备完成，请点击重试。");
+          }
+        }
       }
+
+      const exportHtml = renderStructuredArticleHtml(activeDraft, publicUrls);
+      const plain = structuredDraftToPlainText(activeDraft);
+      await writeWechatClipboard(exportHtml, plain);
+
+      window.localStorage.setItem(PUBLIC_COPY_CONSENT_KEY, "1");
+      setHasConsentedPublicImages(true);
+      setPublishDialogOpen(false);
+      setCopied(true);
+      flashStatus("已复制含长期公开图片的公众号富文本");
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "准备公开图片或复制失败，请重试。";
+      setPublishError(msg);
+      if (!publishDialogOpen) setPublishDialogOpen(true);
+    } finally {
+      setPublishingImages(false);
+    }
+  }
+
+  async function handleCopyClick() {
+    setCopyError("");
+    if (isDraftMode) {
+      const imgCount = extractDraftImageAssetIds(activeDraft.blocks).length;
+      if (imgCount > 0 && !hasConsentedPublicImages) {
+        setPublishError("");
+        setPublishDialogOpen(true);
+        return;
+      }
+      await executeDraftCopyWithPublicImages();
+      return;
+    }
+
+    try {
+      await writeWechatClipboard(previewHtml, state.content);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -247,6 +472,13 @@ export function TypographyWorkbench() {
     { label: "链接", icon: Link2, action: () => insertSnippet("[链接文字](", ")", "https://") },
   ];
 
+  const styleOverridesMap = useMemo(() => {
+    if (isDraftMode) {
+      return { ...state.styleOverrides, [activeDraft.subTemplateId]: activeDraft.templateStyle };
+    }
+    return state.styleOverrides;
+  }, [isDraftMode, activeDraft, state.styleOverrides]);
+
   return (
     <div className="flex min-h-screen flex-col bg-neutral-50 text-neutral-950">
       <header className="sticky top-0 z-30 border-b border-neutral-200 bg-white/95 backdrop-blur-md">
@@ -261,6 +493,30 @@ export function TypographyWorkbench() {
             </Link>
             <span className="text-neutral-300" aria-hidden="true">/</span>
             <h1 className="text-base font-semibold text-neutral-950">公众号排版</h1>
+
+            {activeDraft && (
+              <div className="inline-flex rounded-lg border border-neutral-200 bg-neutral-100 p-0.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setEditorMode("markdown")}
+                  className={`rounded-md px-2.5 py-0.5 font-medium ${
+                    editorMode === "markdown" ? "bg-white text-neutral-950 shadow-sm" : "text-neutral-600"
+                  }`}
+                >
+                  Markdown 自由排版
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditorMode("draft")}
+                  className={`rounded-md px-2.5 py-0.5 font-medium ${
+                    editorMode === "draft" ? "bg-neutral-950 text-white shadow-sm" : "text-neutral-600"
+                  }`}
+                >
+                  画布排版稿
+                </button>
+              </div>
+            )}
+
             <span className="hidden rounded-full bg-neutral-100 px-2.5 py-0.5 text-xs tabular-nums text-neutral-600 sm:inline-flex">
               {stats.total} 字 · 约 {stats.minutes} 分钟阅读
             </span>
@@ -272,6 +528,15 @@ export function TypographyWorkbench() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setFromCanvasOpen(true)}
+              className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-neutral-900 bg-white px-3 py-1 text-xs font-semibold text-neutral-950 shadow-sm transition hover:bg-neutral-100"
+            >
+              <Sparkles size={13} aria-hidden="true" />
+              从画布生成
+            </button>
+
             <div className="inline-flex rounded-lg border border-neutral-200 bg-neutral-50 p-0.5" role="group" aria-label="预览视口">
               <button
                 type="button"
@@ -311,30 +576,34 @@ export function TypographyWorkbench() {
               模板与样式
             </button>
 
-            <button
-              type="button"
-              onClick={handleRequestLoadSample}
-              className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-700 transition hover:bg-neutral-50"
-            >
-              <BookOpen size={13} aria-hidden="true" />
-              加载示例
-            </button>
+            {!isDraftMode && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleRequestLoadSample}
+                  className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-700 transition hover:bg-neutral-50"
+                >
+                  <BookOpen size={13} aria-hidden="true" />
+                  加载示例
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".md,.markdown,.txt"
+                  onChange={(e) => void importMarkdown(e)}
+                  hidden
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-700 transition hover:bg-neutral-50"
+                >
+                  <Upload size={13} aria-hidden="true" />
+                  导入
+                </button>
+              </>
+            )}
 
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".md,.markdown,.txt"
-              onChange={(e) => void importMarkdown(e)}
-              hidden
-            />
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-medium text-neutral-700 transition hover:bg-neutral-50"
-            >
-              <Upload size={13} aria-hidden="true" />
-              导入
-            </button>
             <button
               type="button"
               onClick={exportMarkdown}
@@ -343,19 +612,21 @@ export function TypographyWorkbench() {
               <Download size={13} aria-hidden="true" />
               导出
             </button>
+
             <button
               type="button"
-              onClick={() => void copyForWechat()}
-              className="inline-flex min-h-8 items-center gap-1.5 rounded-lg bg-neutral-950 px-3.5 py-1 text-xs font-medium text-white shadow-sm transition hover:bg-neutral-800"
+              disabled={publishingImages}
+              onClick={() => void handleCopyClick()}
+              className="inline-flex min-h-8 items-center gap-1.5 rounded-lg bg-neutral-950 px-3.5 py-1 text-xs font-medium text-white shadow-sm transition hover:bg-neutral-800 disabled:opacity-60"
             >
               {copied ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
-              {copied ? "已复制富文本" : "一键复制到公众号"}
+              {publishingImages ? "正在准备图片…" : copied ? "已复制富文本" : "一键复制到公众号"}
             </button>
           </div>
         </div>
       </header>
 
-      {confirmLoadSample && (
+      {confirmLoadSample && !isDraftMode && (
         <div
           role="alertdialog"
           aria-labelledby="confirm-sample-title"
@@ -397,7 +668,7 @@ export function TypographyWorkbench() {
             <ThemePicker
               activeThemeId={selectedThemeId}
               activeSubTemplateId={activeSub.id}
-              styleOverrides={state.styleOverrides}
+              styleOverrides={styleOverridesMap}
               onSelectTheme={handleSelectTheme}
               onSelectSubTemplate={handleSelectSubTemplate}
             />
@@ -413,34 +684,52 @@ export function TypographyWorkbench() {
       )}
 
       <main className="mx-auto grid w-full max-w-[1600px] flex-1 gap-4 p-4 sm:p-5 lg:grid-cols-12">
-        {/* 左侧：Markdown 工具栏 + 编辑器 */}
-        <section aria-label="左侧 Markdown 编辑区" className="flex flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm lg:col-span-6">
-          <div className="flex flex-wrap items-center gap-1 border-b border-neutral-100 bg-neutral-50/70 px-3 py-2">
-            {toolbarActions.map((item) => {
-              const Icon = item.icon;
-              return (
-                <button
-                  key={item.label}
-                  type="button"
-                  title={item.label}
-                  aria-label={item.label}
-                  onClick={item.action}
-                  className="inline-flex size-8 items-center justify-center rounded-md text-neutral-600 transition hover:bg-white hover:text-neutral-950 hover:shadow-sm"
-                >
-                  <Icon size={15} aria-hidden="true" />
-                </button>
-              );
-            })}
-            <span className="ml-auto text-[11px] text-neutral-400">切换模板仅改样式，草稿自动保存</span>
-          </div>
+        {/* 左侧：Markdown 自由编辑器 或 画布排版稿精修器 */}
+        <section
+          aria-label={isDraftMode ? "左侧排版稿结构化编辑区" : "左侧 Markdown 编辑区"}
+          className="flex max-h-[calc(100dvh-120px)] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm lg:col-span-6"
+        >
+          {isDraftMode ? (
+            <StructuredDraftEditor
+              draft={activeDraft}
+              imageUrls={draftImageUrls}
+              saving={draftSaving}
+              dirty={draftDirty}
+              conflictError={conflictError}
+              onChangeDraft={mutateDraft}
+              onSaveNow={() => void saveDraftToServer()}
+              onReloadLatest={() => void openDraftById(activeDraft.id)}
+            />
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center gap-1 border-b border-neutral-100 bg-neutral-50/70 px-3 py-2">
+                {toolbarActions.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.label}
+                      type="button"
+                      title={item.label}
+                      aria-label={item.label}
+                      onClick={item.action}
+                      className="inline-flex size-8 items-center justify-center rounded-md text-neutral-600 transition hover:bg-white hover:text-neutral-950 hover:shadow-sm"
+                    >
+                      <Icon size={15} aria-hidden="true" />
+                    </button>
+                  );
+                })}
+                <span className="ml-auto text-[11px] text-neutral-400">切换模板仅改样式，草稿自动保存</span>
+              </div>
 
-          <textarea
-            ref={textareaRef}
-            aria-label="Markdown 正文编辑器"
-            value={state.content}
-            onChange={(e) => handleContentChange(e.target.value)}
-            className="min-h-[540px] w-full flex-1 resize-none border-0 bg-white p-4 font-mono text-sm leading-relaxed text-neutral-900 focus:outline-none"
-          />
+              <textarea
+                ref={textareaRef}
+                aria-label="Markdown 正文编辑器"
+                value={state.content}
+                onChange={(e) => handleContentChange(e.target.value)}
+                className="min-h-[540px] w-full flex-1 resize-none border-0 bg-white p-4 font-mono text-sm leading-relaxed text-neutral-900 focus:outline-none"
+              />
+            </>
+          )}
         </section>
 
         {/* 右侧：微信公众号实时预览 */}
@@ -451,13 +740,40 @@ export function TypographyWorkbench() {
             }`}
           >
             <div className="flex items-center justify-between border-b border-neutral-100 bg-neutral-50 px-5 py-3 text-xs text-neutral-500">
-              <span className="font-medium text-neutral-900">创作工作台 · 公众号预览</span>
+              <span className="font-medium text-neutral-900">
+                创作工作台 · {isDraftMode ? "画布排版稿预览" : "公众号预览"}
+              </span>
               <span>{activeSub.name}</span>
             </div>
             <div className="min-h-[540px]" dangerouslySetInnerHTML={{ __html: previewHtml }} />
           </div>
         </section>
       </main>
+
+      <FromCanvasDialog
+        open={fromCanvasOpen}
+        initialProjectId={initialProjectId}
+        initialSnapshotId={initialSnapshotId}
+        activeSubTemplateId={activeSub.id}
+        activeTemplateStyle={activeStyle}
+        onSelectSubTemplateId={(id) => {
+          const tpl = getSubTemplate(id);
+          handleSelectSubTemplate(tpl);
+        }}
+        onOpenDraft={openDraftById}
+        onClose={() => setFromCanvasOpen(false)}
+      />
+
+      <PublishCopyDialog
+        open={publishDialogOpen}
+        imageCount={activeDraft ? extractDraftImageAssetIds(activeDraft.blocks).length : 0}
+        publishing={publishingImages}
+        error={publishError}
+        onConfirm={() => void executeDraftCopyWithPublicImages()}
+        onClose={() => {
+          if (!publishingImages) setPublishDialogOpen(false);
+        }}
+      />
     </div>
   );
 }

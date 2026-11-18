@@ -2,12 +2,9 @@ import "server-only";
 import { createServerAdminClient } from "@/lib/supabase/admin";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { StudioError } from "./errors";
 
-export class StudioError extends Error {
-  constructor(message: string, public status = 400) {
-    super(message);
-  }
-}
+export { StudioError };
 
 export function studioAdmin() {
   try {
