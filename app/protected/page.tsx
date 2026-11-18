@@ -9,17 +9,17 @@ export default async function ProtectedPage() {
   const { supabase } = await studioPageSession();
   const projects = await readProjects(supabase, 4);
   return (
-    <main className="min-h-screen bg-white pb-14 text-neutral-950">
-      <section className="mx-auto flex min-h-[54vh] w-full max-w-[600px] flex-col justify-center gap-5 px-5 py-12">
-        <h1 className="flex items-center justify-center gap-2 text-center text-2xl font-semibold tracking-tight sm:text-3xl">
+    <main className="studio-home pb-14 text-neutral-950">
+      <section className="studio-hero" data-enter>
+        <h1 className="flex items-center justify-center gap-2 text-center text-3xl font-semibold tracking-tight sm:text-5xl">
           <span className="grid size-8 place-items-center rounded-full bg-neutral-950 text-white"><ImageIcon size={16} /></span>
           用画布开始创作
         </h1>
         <HomeComposer />
       </section>
-      <section className="mx-auto max-w-[1580px] px-5 sm:px-12">
+      <section className="studio-recent">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-sm font-semibold">最近项目</h2>
+          <h2 className="text-xl font-semibold">最近项目</h2>
           <Link href="/projects" className="flex items-center gap-1 text-xs text-neutral-600 hover:text-neutral-950">
             查看全部<ChevronRight size={13} />
           </Link>

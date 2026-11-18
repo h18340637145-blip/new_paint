@@ -69,9 +69,9 @@ export default async function ProfilePage({ searchParams }: {
     : 0;
 
   return (
-    <main className="min-h-screen bg-neutral-50/70 text-neutral-950">
-      <div className="mx-auto max-w-3xl space-y-8 px-4 py-8 sm:px-8">
-        <header className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-neutral-200/90 bg-white p-5 shadow-sm">
+    <main className="profile-surface landing-motion min-h-screen text-neutral-950">
+      <div className="mx-auto max-w-5xl space-y-8 px-4 py-8 sm:px-8">
+        <header data-enter className="profile-heading flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-neutral-200/90 bg-white p-5 shadow-sm">
           <div className="min-w-0 space-y-1">
             <Link
               href="/protected"
@@ -79,7 +79,7 @@ export default async function ProfilePage({ searchParams }: {
             >
               ← 返回工作台
             </Link>
-            <h1 className="text-2xl font-semibold tracking-tight text-neutral-950">个人中心</h1>
+            <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">个人中心</h1>
             {data.claims.email && <p className="text-sm text-neutral-600">{data.claims.email}</p>}
           </div>
           <LogoutButton />
@@ -95,7 +95,7 @@ export default async function ProfilePage({ searchParams }: {
           </p>
         )}
 
-        <section aria-labelledby="subscription-title" className="space-y-4">
+        <section aria-labelledby="subscription-title" className="profile-plans">
           <article className="space-y-4 rounded-2xl border border-neutral-200/90 bg-white p-5 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="space-y-1">
@@ -136,7 +136,7 @@ export default async function ProfilePage({ searchParams }: {
                   aria-label="本月生图剩余额度"
                 >
                   <div
-                    className="h-full rounded-full bg-neutral-900 transition-[width] duration-300"
+                    className="profile-quota h-full rounded-full transition-[width] duration-300"
                     style={{ width: `${quotaRatio}%` }}
                   />
                 </div>

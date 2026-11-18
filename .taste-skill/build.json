@@ -1,0 +1,11 @@
+{
+ "page": null,
+ "url": "http://localhost:3000/",
+ "root": null,
+ "kind": "software",
+ "category": "画布生图与公众号排版",
+ "primary": "免费开始创作",
+ "rounds": 3,
+ "start": "2026-11-18T09:32:57.863Z",
+ "by": "gate.mjs --start"
+}

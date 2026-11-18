@@ -302,7 +302,7 @@ export function CanvasWorkspace({ project, initial, initialAgentTurns, initialPl
   ].sort((a, b) => a.entry.createdAt.localeCompare(b.entry.createdAt));
 
   return (
-    <main className="flex h-dvh min-h-0 flex-col overflow-hidden bg-neutral-100 text-neutral-950 md:flex-row">
+    <main className="canvas-surface landing-motion flex h-dvh min-h-0 flex-col overflow-hidden bg-neutral-100 text-neutral-950 md:flex-row">
       <section aria-label="项目画布" onKeyDown={canvasKeyDown} className="relative min-h-0 flex-1">
         <ReactFlow<StudioNode> nodes={nodes} edges={[]} nodeTypes={nodeTypes} onNodesChange={moveNodes}
           nodesDraggable={!selecting} nodesConnectable={false} deleteKeyCode={null} minZoom={0.12} maxZoom={3}
@@ -323,10 +323,10 @@ export function CanvasWorkspace({ project, initial, initialAgentTurns, initialPl
           onNodeDragStop={(_, node) => {
             saveNodePosition(node.id, "placed" in node.data, node.position);
           }}>
-          <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="#d4d4d4" />
+          <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="#aabacb" />
           <Controls showInteractive={false} />
         </ReactFlow>
-        <div className="absolute left-3 top-3 z-10 flex items-center gap-2 rounded-xl border border-neutral-200 bg-white p-1.5 pr-3 shadow-sm">
+        <div className="canvas-project-label absolute left-3 top-3 z-10 flex items-center gap-2 rounded-xl border border-neutral-200 bg-white p-1.5 pr-3 shadow-sm">
           <Link href="/projects" aria-label="返回项目列表" className="rounded-lg p-1.5 hover:bg-neutral-100"><ArrowLeft size={15} /></Link>
           <h1 className="max-w-64 truncate text-sm font-semibold">{project.title}</h1>
         </div>
@@ -354,7 +354,7 @@ export function CanvasWorkspace({ project, initial, initialAgentTurns, initialPl
         }} />
       <aside aria-label="生图对话面板" style={{ "--panel-width": `${width}px` } as React.CSSProperties}
         className="flex h-[48dvh] min-h-0 w-full shrink-0 flex-col bg-white md:h-full md:w-[var(--panel-width)]">
-        <header className="border-b border-neutral-100 px-4 py-3 text-sm font-semibold">
+        <header className="canvas-chat-header border-b px-4 py-3 text-sm font-semibold">
           {entries.length ? "创作记录" : "新对话"}
         </header>
         <div ref={history} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">

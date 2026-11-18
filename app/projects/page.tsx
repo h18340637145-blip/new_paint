@@ -12,11 +12,11 @@ export default async function ProjectsPage({ searchParams }: {
   const page = Number.isSafeInteger(rawPage) && rawPage > 0 && rawPage <= 10_000 ? rawPage : 1;
   const projects = await readProjects(supabase, projectPageSize + 1, (page - 1) * projectPageSize);
   return (
-    <main className="min-h-screen bg-white px-5 py-6 text-neutral-950 sm:px-10">
-      <div className="mb-6 flex items-center gap-3">
+    <main className="landing-motion project-library">
+      <header className="library-heading" data-enter>
         <Link href="/protected" aria-label="返回创作首页" className="rounded-lg p-1.5 hover:bg-neutral-100"><ArrowLeft size={18} /></Link>
-        <h1 className="text-xl font-semibold">项目</h1>
-      </div>
+        <h1 className="text-3xl font-semibold tracking-tight sm:text-5xl">项目库</h1>
+      </header>
       <ProjectGrid projects={projects.slice(0, projectPageSize)} />
       {(page > 1 || projects.length > projectPageSize) && (
         <nav aria-label="项目分页" className="mt-8 flex items-center justify-center gap-5 text-sm">

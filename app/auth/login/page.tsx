@@ -5,7 +5,7 @@ export default async function Page({ searchParams }: {
 }) {
   const { error, next } = await searchParams;
   return (
-    <div className="flex min-h-svh w-full items-center justify-center p-6 md:p-10">
+    <div className="flex w-full items-center justify-center">
       <div className="w-full max-w-sm">
         <LoginForm next={next === "profile" ? next : undefined} errorCode={typeof error === "string" ? error : undefined} />
       </div>
