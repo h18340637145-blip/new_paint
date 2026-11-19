@@ -29,7 +29,10 @@ import { PublishCopyDialog } from "@/components/typography/publish-copy-dialog";
 import { StructuredDraftEditor } from "@/components/typography/structured-editor";
 import { StylePanel } from "@/components/typography/style-panel";
 import { ThemePicker } from "@/components/typography/theme-picker";
+import { XiumiDrawer } from "@/components/typography/xiumi-drawer";
+import { AutoGrowTextarea } from "@/components/ui/auto-grow-textarea";
 import {
+  applyPresetToMarkdown,
   cloneStyleConfig,
   countArticleStats,
   createDefaultPersistedState,
@@ -37,13 +40,16 @@ import {
   getSubTemplate,
   getSubTemplatesForTheme,
   migratePersistedState,
+  plainToRuns,
   renderStructuredArticleHtml,
   renderWechatHtml,
+  runsToPlainText,
   structuredDraftToPlainText,
   TYPOGRAPHY_STORAGE_KEY,
   TYPOGRAPHY_SUBTEMPLATES,
+  type XiumiPreset,
 } from "@/lib/typography/templates";
-import type { StructuredArticleDraft } from "@/lib/typography/structured";
+import type { StructuredArticleBlock, StructuredArticleDraft } from "@/lib/typography/structured";
 import type {
   ColorPalette,
   TemplateStyleConfig,
@@ -66,6 +72,37 @@ async function writeWechatClipboard(html: string, plainText: string) {
   }
 }
 
+function inspectMarkdownRegion(markdown: string, selStart: number, selEnd: number): {
+  label: string;
+  presetId?: string;
+  rangeStart: number;
+  rangeEnd: number;
+  innerBody?: string;
+} {
+  if (!markdown.trim()) {
+    return { label: "空白正文（将直接插入）", rangeStart: 0, rangeEnd: 0 };
+  }
+  let rangeStart = Math.min(markdown.length, Math.max(0, selStart));
+  let rangeEnd = Math.min(markdown.length, Math.max(0, selEnd));
+  if (rangeEnd <= rangeStart) {
+    const prevBlank = markdown.lastIndexOf("\n\n", Math.max(0, rangeStart - 1));
+    rangeStart = prevBlank === -1 ? 0 : prevBlank + 2;
+    const nextBlank = markdown.indexOf("\n\n", rangeStart);
+    rangeEnd = nextBlank === -1 ? markdown.length : nextBlank;
+  }
+  const rawSlice = markdown.slice(rangeStart, rangeEnd).trim();
+  const match = /^:::preset\[([a-z0-9-]+)\]\r?\n([\s\S]*?)\r?\n:::$/i.exec(rawSlice);
+  const cleanText = (match ? match[2] : rawSlice).replace(/\s+/g, " ").trim();
+  const snippet = cleanText.length > 16 ? `${cleanText.slice(0, 16)}…` : cleanText || "当前光标段落";
+  return {
+    label: selEnd > selStart ? `选区「${snippet}」` : `段落「${snippet}」`,
+    presetId: match ? match[1].toLowerCase() : undefined,
+    rangeStart,
+    rangeEnd,
+    innerBody: match ? match[2].trim() : undefined,
+  };
+}
+
 export function TypographyWorkbench({
   initialProjectId = null,
   initialSnapshotId = null,
@@ -83,6 +120,8 @@ export function TypographyWorkbench({
   const [draftDirty, setDraftDirty] = useState(false);
   const [draftSaving, setDraftSaving] = useState(false);
   const [conflictError, setConflictError] = useState("");
+  const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
+  const [mdSelection, setMdSelection] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
 
   const [fromCanvasOpen, setFromCanvasOpen] = useState(Boolean(initialProjectId || initialSnapshotId));
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
@@ -117,6 +156,7 @@ export function TypographyWorkbench({
       }
       const loaded = data.draft as StructuredArticleDraft;
       setActiveDraft(loaded);
+      setSelectedBlockId(loaded.blocks[0]?.id ?? null);
       setDraftImageUrls((data.imageUrls ?? {}) as Record<string, string>);
       setDraftDirty(false);
       setConflictError("");
@@ -172,7 +212,9 @@ export function TypographyWorkbench({
         throw new Error(data.error || "保存排版稿失败。");
       }
       const saved = data.draft as StructuredArticleDraft;
-      setActiveDraft((prev) => (prev && prev.id === saved.id ? { ...prev, version: saved.version, updatedAt: saved.updatedAt } : prev));
+      setActiveDraft((prev) =>
+        prev && prev.id === saved.id ? { ...prev, version: saved.version, updatedAt: saved.updatedAt } : prev,
+      );
       setDraftDirty(false);
       setConflictError("");
     } catch (err) {
@@ -214,6 +256,215 @@ export function TypographyWorkbench({
   function mutateDraft(updater: (prev: StructuredArticleDraft) => StructuredArticleDraft) {
     setActiveDraft((prev) => (prev ? updater(prev) : prev));
     setDraftDirty(true);
+  }
+
+  function syncMdSelectionFromTextarea() {
+    const el = textareaRef.current;
+    if (!el) return;
+    setMdSelection({
+      start: el.selectionStart ?? 0,
+      end: el.selectionEnd ?? 0,
+    });
+  }
+
+  const mdRegion = useMemo(
+    () => inspectMarkdownRegion(state.content, mdSelection.start, mdSelection.end),
+    [state.content, mdSelection.start, mdSelection.end],
+  );
+
+  const selectedDraftBlock = useMemo(() => {
+    if (!isDraftMode || !activeDraft) return null;
+    return (
+      activeDraft.blocks.find((b) => b.id === selectedBlockId)
+      ?? activeDraft.blocks[0]
+      ?? null
+    );
+  }, [isDraftMode, activeDraft, selectedBlockId]);
+
+  const drawerTargetInfo = useMemo(() => {
+    if (!isDraftMode) {
+      return { label: mdRegion.label, activePresetId: mdRegion.presetId };
+    }
+    if (!selectedDraftBlock) {
+      return { label: "文末新增组件块", activePresetId: undefined };
+    }
+    const presetId =
+      "presetId" in selectedDraftBlock ? selectedDraftBlock.presetId : undefined;
+    if (
+      selectedDraftBlock.type === "heading"
+      || selectedDraftBlock.type === "paragraph"
+      || selectedDraftBlock.type === "blockquote"
+      || selectedDraftBlock.type === "preset"
+    ) {
+      const txt = runsToPlainText(selectedDraftBlock.runs).replace(/\s+/g, " ").trim();
+      const short = txt.length > 14 ? `${txt.slice(0, 14)}…` : txt || "空文本块";
+      return { label: `块「${short}」`, activePresetId: presetId };
+    }
+    if (selectedDraftBlock.type === "image") {
+      return { label: `配图「${selectedDraftBlock.alt || "画布配图"}」`, activePresetId: presetId };
+    }
+    if (selectedDraftBlock.type === "list") {
+      return { label: `列表（共 ${selectedDraftBlock.items.length} 项）`, activePresetId: undefined };
+    }
+    return { label: "分割线块", activePresetId: undefined };
+  }, [isDraftMode, mdRegion, selectedDraftBlock]);
+
+  function handleApplyPresetToRegion(preset: XiumiPreset) {
+    if (!isDraftMode) {
+      const liveStart = textareaRef.current?.selectionStart ?? mdSelection.start;
+      const liveEnd = textareaRef.current?.selectionEnd ?? mdSelection.end;
+      const { nextMarkdown, focusOffset } = applyPresetToMarkdown(
+        state.content,
+        liveStart,
+        liveEnd,
+        preset,
+        "replace-region",
+      );
+      handleContentChange(nextMarkdown);
+      window.requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.setSelectionRange(focusOffset, focusOffset);
+          setMdSelection({ start: focusOffset, end: focusOffset });
+        }
+      });
+      flashStatus(`已将「${preset.name}」套用到当前区域`);
+      return;
+    }
+
+    if (!activeDraft) return;
+    const target = selectedDraftBlock;
+    if (!target) {
+      handleInsertPresetBlock(preset);
+      return;
+    }
+
+    if (preset.category === "image" && target.type !== "image") {
+      flashStatus("请先点击选中一个「画布配图」块，再套用图片边框模板");
+      return;
+    }
+
+    mutateDraft((prev) => ({
+      ...prev,
+      blocks: prev.blocks.map((b): StructuredArticleBlock => {
+        if (b.id !== target.id) return b;
+        if (b.type === "image") {
+          return preset.category === "image" ? { ...b, presetId: preset.id } : b;
+        }
+        if (
+          b.type === "heading"
+          || b.type === "paragraph"
+          || b.type === "blockquote"
+          || b.type === "preset"
+        ) {
+          return { ...b, presetId: preset.id };
+        }
+        if (b.type === "list") {
+          const joined = b.items.map((it) => runsToPlainText(it.runs)).join("\n");
+          return {
+            id: b.id,
+            type: "preset",
+            presetId: preset.id,
+            runs: plainToRuns(joined || preset.sampleText),
+            sourceNodeId: b.sourceNodeId,
+          };
+        }
+        return {
+          id: b.id,
+          type: "preset",
+          presetId: preset.id,
+          runs: plainToRuns(preset.sampleText),
+        };
+      }),
+    }));
+    flashStatus(`已将「${preset.name}」应用到选中块`);
+  }
+
+  function handleInsertPresetBlock(preset: XiumiPreset) {
+    if (!isDraftMode) {
+      const liveStart = textareaRef.current?.selectionStart ?? mdSelection.start;
+      const liveEnd = textareaRef.current?.selectionEnd ?? mdSelection.end;
+      const { nextMarkdown, focusOffset } = applyPresetToMarkdown(
+        state.content,
+        liveStart,
+        liveEnd,
+        preset,
+        "insert-below",
+      );
+      handleContentChange(nextMarkdown);
+      window.requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.setSelectionRange(focusOffset, focusOffset);
+          setMdSelection({ start: focusOffset, end: focusOffset });
+        }
+      });
+      flashStatus(`已插入「${preset.name}」组件块`);
+      return;
+    }
+
+    const newId = crypto.randomUUID();
+    const newBlock: StructuredArticleBlock = {
+      id: newId,
+      type: "preset",
+      presetId: preset.id,
+      runs: plainToRuns(preset.sampleText),
+    };
+    mutateDraft((prev) => {
+      const idx = selectedBlockId ? prev.blocks.findIndex((b) => b.id === selectedBlockId) : -1;
+      if (idx === -1) {
+        return { ...prev, blocks: [...prev.blocks, newBlock] };
+      }
+      const next = [...prev.blocks];
+      next.splice(idx + 1, 0, newBlock);
+      return { ...prev, blocks: next };
+    });
+    setSelectedBlockId(newId);
+    flashStatus(`已插入「${preset.name}」组件块`);
+  }
+
+  function handleClearRegionPreset() {
+    if (!isDraftMode) {
+      if (!mdRegion.presetId || mdRegion.innerBody === undefined) return;
+      const next =
+        state.content.slice(0, mdRegion.rangeStart)
+        + mdRegion.innerBody
+        + state.content.slice(mdRegion.rangeEnd);
+      handleContentChange(next);
+      flashStatus("已移除当前区域的组件样式");
+      return;
+    }
+    if (!selectedDraftBlock) return;
+    mutateDraft((prev) => ({
+      ...prev,
+      blocks: prev.blocks.map((b) => {
+        if (b.id !== selectedDraftBlock.id) return b;
+        if (b.type === "preset") {
+          return { id: b.id, type: "paragraph", runs: b.runs, sourceNodeId: b.sourceNodeId };
+        }
+        if ("presetId" in b && b.presetId) {
+          const copy = { ...b };
+          delete copy.presetId;
+          return copy;
+        }
+        return b;
+      }),
+    }));
+    flashStatus("已还原选中块的默认样式");
+  }
+
+  function handlePreviewClick(e: React.MouseEvent<HTMLDivElement>) {
+    if (!isDraftMode) return;
+    const target = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-block-id]");
+    const blockId = target?.dataset.blockId;
+    if (!blockId) return;
+    setSelectedBlockId(blockId);
+    const editorCard = document.querySelector<HTMLElement>(
+      `[data-editor-block-id="${CSS.escape(blockId)}"]`,
+    );
+    editorCard?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
   function handleSelectTheme(themeId: ThemeId) {
@@ -348,6 +599,7 @@ export function TypographyWorkbench({
       el.focus();
       const cursorStart = start + before.length;
       el.setSelectionRange(cursorStart, cursorStart + selected.length);
+      setMdSelection({ start: cursorStart, end: cursorStart + selected.length });
     });
   }
 
@@ -372,12 +624,49 @@ export function TypographyWorkbench({
     flashStatus(`已导入 ${file.name}`);
   }
 
+  const effectiveDraftImageUrls = useMemo(() => {
+    if (!activeDraft) return draftImageUrls;
+    const merged: Record<string, string> = { ...draftImageUrls };
+    for (const id of extractDraftImageAssetIds(activeDraft.blocks)) {
+      const existing = merged[id];
+      if (!existing || existing.includes("/storage/v1/object/sign/")) {
+        merged[id] = `/api/typography/preview-image/${encodeURIComponent(activeDraft.projectId)}/${encodeURIComponent(id)}`;
+      }
+    }
+    return merged;
+  }, [activeDraft, draftImageUrls]);
+
+  const draftProjectId = activeDraft?.projectId;
+  const draftTitle = activeDraft?.title;
+  const draftTemplateStyle = activeDraft?.templateStyle;
+  const draftDocumentStyle = activeDraft?.documentStyle;
+  const draftBlocks = activeDraft?.blocks;
+
   const previewHtml = useMemo(() => {
-    if (isDraftMode) {
-      return renderStructuredArticleHtml(activeDraft, draftImageUrls);
+    if (isDraftMode && draftTitle !== undefined && draftTemplateStyle && draftDocumentStyle && draftBlocks) {
+      return renderStructuredArticleHtml(
+        {
+          projectId: draftProjectId,
+          title: draftTitle,
+          templateStyle: draftTemplateStyle,
+          documentStyle: draftDocumentStyle,
+          blocks: draftBlocks,
+        },
+        effectiveDraftImageUrls,
+      );
     }
     return renderWechatHtml(state.content, activeStyle);
-  }, [isDraftMode, activeDraft, draftImageUrls, state.content, activeStyle]);
+  }, [
+    isDraftMode,
+    draftProjectId,
+    draftTitle,
+    draftTemplateStyle,
+    draftDocumentStyle,
+    draftBlocks,
+    effectiveDraftImageUrls,
+    state.content,
+    activeStyle,
+  ]);
 
   const stats = useMemo(
     () => countArticleStats(isDraftMode ? structuredDraftToPlainText(activeDraft) : state.content),
@@ -417,7 +706,7 @@ export function TypographyWorkbench({
         }
       }
 
-      const exportHtml = renderStructuredArticleHtml(activeDraft, publicUrls);
+      const exportHtml = renderStructuredArticleHtml(activeDraft, publicUrls, { forExport: true });
       const plain = structuredDraftToPlainText(activeDraft);
       await writeWechatClipboard(exportHtml, plain);
 
@@ -482,7 +771,7 @@ export function TypographyWorkbench({
   return (
     <div className="flex min-h-screen flex-col bg-neutral-50 text-neutral-950">
       <header className="sticky top-0 z-30 border-b border-neutral-200 bg-white/95 backdrop-blur-md">
-        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-3 px-4 py-2.5 sm:px-6">
+        <div className="mx-auto flex max-w-[1680px] flex-wrap items-center justify-between gap-3 px-4 py-2.5 sm:px-6">
           <div className="flex flex-wrap items-center gap-2.5">
             <Link href="/" className="text-sm font-medium text-neutral-600 hover:text-neutral-950 hover:underline">
               ← 首页
@@ -490,6 +779,10 @@ export function TypographyWorkbench({
             <span className="text-neutral-300" aria-hidden="true">/</span>
             <Link href="/protected" className="text-sm font-medium text-neutral-600 hover:text-neutral-950 hover:underline">
               工作台
+            </Link>
+            <span className="text-neutral-300" aria-hidden="true">/</span>
+            <Link href="/profile" className="text-sm font-medium text-neutral-600 hover:text-neutral-950 hover:underline">
+              个人中心
             </Link>
             <span className="text-neutral-300" aria-hidden="true">/</span>
             <h1 className="text-base font-semibold text-neutral-950">公众号排版</h1>
@@ -632,7 +925,7 @@ export function TypographyWorkbench({
           aria-labelledby="confirm-sample-title"
           className="border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-950 sm:px-6"
         >
-          <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-2">
+          <div className="mx-auto flex max-w-[1680px] flex-wrap items-center justify-between gap-2">
             <p id="confirm-sample-title">
               当前编辑区已有正文，加载「<strong>{activeSub.name}</strong>」示例将替换当前内容，是否继续？
             </p>
@@ -664,7 +957,7 @@ export function TypographyWorkbench({
 
       {showStylePanel && (
         <section aria-label="模板库与局部样式设置" className="border-b border-neutral-200 bg-white">
-          <div className="mx-auto max-w-[1600px] space-y-3 px-4 py-3.5 sm:px-6">
+          <div className="mx-auto max-w-[1680px] space-y-3 px-4 py-3.5 sm:px-6">
             <ThemePicker
               activeThemeId={selectedThemeId}
               activeSubTemplateId={activeSub.id}
@@ -683,71 +976,107 @@ export function TypographyWorkbench({
         </section>
       )}
 
-      <main className="mx-auto grid w-full max-w-[1600px] flex-1 gap-4 p-4 sm:p-5 lg:grid-cols-12">
-        {/* 左侧：Markdown 自由编辑器 或 画布排版稿精修器 */}
-        <section
-          aria-label={isDraftMode ? "左侧排版稿结构化编辑区" : "左侧 Markdown 编辑区"}
-          className="flex max-h-[calc(100dvh-120px)] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm lg:col-span-6"
-        >
-          {isDraftMode ? (
-            <StructuredDraftEditor
-              draft={activeDraft}
-              imageUrls={draftImageUrls}
-              saving={draftSaving}
-              dirty={draftDirty}
-              conflictError={conflictError}
-              onChangeDraft={mutateDraft}
-              onSaveNow={() => void saveDraftToServer()}
-              onReloadLatest={() => void openDraftById(activeDraft.id)}
-            />
-          ) : (
-            <>
-              <div className="flex flex-wrap items-center gap-1 border-b border-neutral-100 bg-neutral-50/70 px-3 py-2">
-                {toolbarActions.map((item) => {
-                  const Icon = item.icon;
-                  return (
-                    <button
-                      key={item.label}
-                      type="button"
-                      title={item.label}
-                      aria-label={item.label}
-                      onClick={item.action}
-                      className="inline-flex size-8 items-center justify-center rounded-md text-neutral-600 transition hover:bg-white hover:text-neutral-950 hover:shadow-sm"
-                    >
-                      <Icon size={15} aria-hidden="true" />
-                    </button>
-                  );
-                })}
-                <span className="ml-auto text-[11px] text-neutral-400">切换模板仅改样式，草稿自动保存</span>
-              </div>
+      <main className="mx-auto flex w-full max-w-[1680px] flex-1 flex-col gap-4 p-4 sm:p-5 lg:flex-row lg:items-start">
+        {/* 秀米式左侧图文组件抽屉栏 */}
+        <XiumiDrawer
+          style={activeStyle}
+          targetLabel={drawerTargetInfo.label}
+          activePresetId={drawerTargetInfo.activePresetId}
+          onApplyToRegion={handleApplyPresetToRegion}
+          onInsertBlock={handleInsertPresetBlock}
+          onClearRegionPreset={
+            drawerTargetInfo.activePresetId ? handleClearRegionPreset : undefined
+          }
+        />
 
-              <textarea
-                ref={textareaRef}
-                aria-label="Markdown 正文编辑器"
-                value={state.content}
-                onChange={(e) => handleContentChange(e.target.value)}
-                className="min-h-[540px] w-full flex-1 resize-none border-0 bg-white p-4 font-mono text-sm leading-relaxed text-neutral-900 focus:outline-none"
-              />
-            </>
-          )}
-        </section>
-
-        {/* 右侧：微信公众号实时预览 */}
-        <section aria-label="右侧公众号预览区" className="flex flex-col items-center overflow-auto rounded-2xl border border-neutral-200 bg-neutral-100/80 p-4 sm:p-6 lg:col-span-6">
-          <div
-            className={`w-full overflow-hidden border border-neutral-300 bg-white shadow-xl transition-[max-width] duration-200 ${
-              previewDevice === "mobile" ? "max-w-[390px] rounded-[28px]" : "max-w-[677px] rounded-xl"
-            }`}
+        {/* 左右等高同步流双栏（无内部滚动条，随页面自然滚动左右对齐） */}
+        <div className="grid min-w-0 flex-1 items-start gap-4 lg:grid-cols-12">
+          {/* 左侧：Markdown 自由编辑器 或 画布排版稿精修器 */}
+          <section
+            aria-label={isDraftMode ? "左侧排版稿结构化编辑区" : "左侧 Markdown 编辑区"}
+            className="flex flex-col rounded-2xl border border-neutral-200 bg-white shadow-sm lg:col-span-6"
           >
-            <div className="flex items-center justify-between border-b border-neutral-100 bg-neutral-50 px-5 py-3 text-xs text-neutral-500">
-              <span className="font-medium text-neutral-900">
-                创作工作台 · {isDraftMode ? "画布排版稿预览" : "公众号预览"}
-              </span>
-              <span>{activeSub.name}</span>
+            {isDraftMode ? (
+              <StructuredDraftEditor
+                draft={activeDraft}
+                imageUrls={effectiveDraftImageUrls}
+                saving={draftSaving}
+                dirty={draftDirty}
+                conflictError={conflictError}
+                selectedBlockId={selectedBlockId}
+                onSelectBlock={setSelectedBlockId}
+                onChangeDraft={mutateDraft}
+                onSaveNow={() => void saveDraftToServer()}
+                onReloadLatest={() => void openDraftById(activeDraft.id)}
+              />
+            ) : (
+              <>
+                <div className="sticky top-[53px] z-20 flex flex-wrap items-center gap-1 rounded-t-2xl border-b border-neutral-100 bg-neutral-50/95 px-3 py-2 backdrop-blur-md">
+                  {toolbarActions.map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <button
+                        key={item.label}
+                        type="button"
+                        title={item.label}
+                        aria-label={item.label}
+                        onClick={item.action}
+                        className="inline-flex size-8 items-center justify-center rounded-md text-neutral-600 transition hover:bg-white hover:text-neutral-950 hover:shadow-sm"
+                      >
+                        <Icon size={15} aria-hidden="true" />
+                      </button>
+                    );
+                  })}
+                  <span className="ml-auto text-[11px] text-neutral-400">左右同步流对齐 · 自动保存</span>
+                </div>
+
+                <AutoGrowTextarea
+                  ref={textareaRef}
+                  minHeightPx={560}
+                  aria-label="Markdown 正文编辑器"
+                  value={state.content}
+                  onSelect={syncMdSelectionFromTextarea}
+                  onClick={syncMdSelectionFromTextarea}
+                  onMouseUp={syncMdSelectionFromTextarea}
+                  onKeyUp={syncMdSelectionFromTextarea}
+                  onBlur={syncMdSelectionFromTextarea}
+                  onChange={(e) => {
+                    handleContentChange(e.target.value);
+                    setMdSelection({
+                      start: e.target.selectionStart ?? 0,
+                      end: e.target.selectionEnd ?? 0,
+                    });
+                  }}
+                  className="w-full rounded-b-2xl border-0 bg-white p-5 font-mono text-sm leading-[1.85] text-neutral-900 focus:outline-none"
+                />
+              </>
+            )}
+          </section>
+
+          {/* 右侧：微信公众号实时预览（无内部滚动条，与左侧编辑区左右并排对齐） */}
+          <section
+            aria-label="右侧公众号预览区"
+            className="flex flex-col items-center rounded-2xl border border-neutral-200 bg-neutral-100/80 p-4 sm:p-6 lg:col-span-6"
+          >
+            <div
+              className={`w-full overflow-hidden border border-neutral-300 bg-white shadow-xl transition-[max-width] duration-200 ${
+                previewDevice === "mobile" ? "max-w-[390px] rounded-[28px]" : "max-w-[677px] rounded-xl"
+              }`}
+            >
+              <div className="flex items-center justify-between border-b border-neutral-100 bg-neutral-50 px-5 py-3 text-xs text-neutral-500">
+                <span className="font-medium text-neutral-900">
+                  创作工作台 · {isDraftMode ? "画布排版稿预览（点击块可定位左侧）" : "公众号预览"}
+                </span>
+                <span>{activeSub.name}</span>
+              </div>
+              <div
+                onClick={handlePreviewClick}
+                className={`min-h-[560px] ${isDraftMode ? "cursor-pointer" : ""}`}
+                dangerouslySetInnerHTML={{ __html: previewHtml }}
+              />
             </div>
-            <div className="min-h-[540px]" dangerouslySetInnerHTML={{ __html: previewHtml }} />
-          </div>
-        </section>
+          </section>
+        </div>
       </main>
 
       <FromCanvasDialog

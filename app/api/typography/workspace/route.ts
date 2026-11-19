@@ -3,7 +3,6 @@ import { requireStudioMember, StudioError } from "@/lib/studio/auth";
 import { mapTaskRow } from "@/lib/studio/article-data";
 import type { SnapshotOrderedNode } from "@/lib/studio/article-graph";
 import { readProject, uuidPattern } from "@/lib/studio/projects";
-import { signImage } from "@/lib/studio/storage";
 
 export const runtime = "nodejs";
 
@@ -86,23 +85,8 @@ export async function GET(request: Request) {
     ];
 
     const assetUrls: Record<string, string> = {};
-    if (snapAssetIds.length > 0) {
-      const { data: assets } = await supabase
-        .from("studio_assets")
-        .select("id,path")
-        .eq("project_id", activeProjectId)
-        .in("id", snapAssetIds)
-        .in("kind", ["reference", "generated"]);
-
-      await Promise.all(
-        (assets ?? []).map(async (a) => {
-          try {
-            assetUrls[a.id] = await signImage(supabase, a.path);
-          } catch {
-            // Skip broken signed url
-          }
-        }),
-      );
+    for (const id of snapAssetIds) {
+      assetUrls[id] = `/api/typography/preview-image/${encodeURIComponent(activeProjectId)}/${encodeURIComponent(id)}`;
     }
 
     return NextResponse.json(

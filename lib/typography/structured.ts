@@ -40,6 +40,7 @@ export type StructuredArticleBlock =
       type: "heading";
       level: 1 | 2 | 3;
       runs: TextRun[];
+      presetId?: string;
       sourceNodeId?: string;
       verbatim?: boolean;
     }
@@ -47,6 +48,7 @@ export type StructuredArticleBlock =
       id: string;
       type: "paragraph";
       runs: TextRun[];
+      presetId?: string;
       sourceNodeId?: string;
       verbatim?: boolean;
     }
@@ -54,6 +56,7 @@ export type StructuredArticleBlock =
       id: string;
       type: "blockquote";
       runs: TextRun[];
+      presetId?: string;
       sourceNodeId?: string;
       verbatim?: boolean;
     }
@@ -70,6 +73,14 @@ export type StructuredArticleBlock =
       assetId: string;
       alt: string;
       caption?: string;
+      presetId?: string;
+      sourceNodeId?: string;
+    }
+  | {
+      id: string;
+      type: "preset";
+      presetId: string;
+      runs: TextRun[];
       sourceNodeId?: string;
     }
   | {
@@ -297,7 +308,12 @@ export function structuredDraftToPlainText(draft: Pick<StructuredArticleDraft, "
   const parts: string[] = [];
   if (draft.title.trim()) parts.push(draft.title.trim());
   for (const block of draft.blocks) {
-    if (block.type === "heading" || block.type === "paragraph" || block.type === "blockquote") {
+    if (
+      block.type === "heading"
+      || block.type === "paragraph"
+      || block.type === "blockquote"
+      || block.type === "preset"
+    ) {
       const txt = runsToPlainText(block.runs).trim();
       if (txt) parts.push(txt);
     } else if (block.type === "list") {

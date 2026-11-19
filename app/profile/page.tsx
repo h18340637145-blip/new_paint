@@ -3,8 +3,10 @@ import { redirect } from "next/navigation";
 import { LogoutButton } from "@/components/logout-button";
 import { OrderList, type BillingOrder } from "@/components/order-list";
 import { Pricing } from "@/components/pricing";
+import { ProfileDraftList } from "@/components/profile-draft-list";
 import { proPlan, checkoutConfiguration, zpayEdgeCheckout } from "@/lib/billing/plans";
 import { ORDER_PAYMENT_WINDOW_MS } from "@/lib/billing/zpay-client";
+import { readUserArticleDrafts } from "@/lib/studio/article-data";
 import { createServerAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -57,7 +59,14 @@ export default async function ProfilePage({ searchParams }: {
   const { data, error } = await supabase.auth.getClaims();
   if (error || !data?.claims.sub) redirect("/signin");
 
-  const [{ payment }, billing] = await Promise.all([searchParams, readBilling(data.claims.sub)]);
+  const [{ payment }, billing, savedDrafts] = await Promise.all([
+    searchParams,
+    readBilling(data.claims.sub),
+    readUserArticleDrafts(createServerAdminClient(), data.claims.sub).catch(() => ({
+      items: [],
+      imageUrls: {},
+    })),
+  ]);
   const now = billing?.now ?? Date.now();
   const active = !!billing?.expiry && Date.parse(billing.expiry) > now;
   const status = !billing ? "暂时无法获取" : active ? "订阅有效" : billing.expiry ? "订阅已到期" : "尚未订阅";
@@ -146,6 +155,22 @@ export default async function ProfilePage({ searchParams }: {
           </article>
 
           <Pricing plan={proPlan} available={checkoutAvailable} />
+        </section>
+
+        <section aria-labelledby="drafts-title" className="space-y-3">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <div>
+              <h2 id="drafts-title" className="text-lg font-semibold text-neutral-950">我的排版稿</h2>
+              <p className="text-xs text-neutral-500">Qwen 生成与人工精修后的公众号排版结果自动保存于此</p>
+            </div>
+            <Link
+              href="/typography"
+              className="text-xs font-medium text-neutral-700 underline underline-offset-4 hover:text-neutral-950"
+            >
+              前往公众号排版工作台 →
+            </Link>
+          </div>
+          <ProfileDraftList items={savedDrafts.items} imageUrls={savedDrafts.imageUrls} />
         </section>
 
         <section aria-labelledby="orders-title" className="space-y-3">

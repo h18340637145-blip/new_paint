@@ -13,7 +13,7 @@ import {
   type SnapshotOrderedNode,
 } from "./article-graph";
 import { bucket } from "./projects";
-import { detectImageMime, signImage } from "./storage";
+import { detectImageMime } from "./storage";
 import {
   downscaleImageForVision,
   generateArticleWithQwen,
@@ -442,27 +442,76 @@ export function mapDraftRow(row: Record<string, unknown>): StructuredArticleDraf
   };
 }
 
+export interface UserArticleDraftItem {
+  draft: StructuredArticleDraft;
+  projectTitle: string;
+}
+
+export async function readUserArticleDrafts(
+  admin: SupabaseClient,
+  userId: string,
+  limit = 20,
+): Promise<{ items: UserArticleDraftItem[]; imageUrls: Record<string, string> }> {
+  const { data: projects, error: projErr } = await admin
+    .from("studio_projects")
+    .select("id,title")
+    .eq("owner_id", userId);
+
+  if (projErr || !projects || projects.length === 0) {
+    return { items: [], imageUrls: {} };
+  }
+
+  const projectTitleById = new Map<string, string>(
+    projects.map((p) => [String(p.id), String(p.title || "未命名画布")]),
+  );
+  const projectIds = Array.from(projectTitleById.keys());
+
+  const { data: rows, error: draftErr } = await admin
+    .from("studio_article_drafts")
+    .select("*")
+    .in("project_id", projectIds)
+    .order("updated_at", { ascending: false })
+    .limit(limit);
+
+  if (draftErr) {
+    if (isMissingTableError(draftErr)) {
+      return { items: [], imageUrls: {} };
+    }
+    return { items: [], imageUrls: {} };
+  }
+
+  const items: UserArticleDraftItem[] = (rows ?? []).map((row) => {
+    const draft = mapDraftRow(row as Record<string, unknown>);
+    return {
+      draft,
+      projectTitle: projectTitleById.get(draft.projectId) ?? "未命名画布",
+    };
+  });
+
+  const imageUrls: Record<string, string> = {};
+  for (const item of items) {
+    for (const id of extractDraftImageAssetIds(item.draft.blocks)) {
+      imageUrls[id] = `/api/typography/preview-image/${encodeURIComponent(item.draft.projectId)}/${encodeURIComponent(id)}`;
+    }
+  }
+
+  return {
+    items,
+    imageUrls,
+  };
+}
+
 export async function signDraftPreviewImages(
-  supabase: SupabaseClient,
+  _supabase: SupabaseClient,
   projectId: string,
   blocks: StructuredArticleBlock[],
 ): Promise<Record<string, string>> {
   const assetIds = extractDraftImageAssetIds(blocks);
-  if (assetIds.length === 0) return {};
-
-  const { data: assets, error } = await supabase
-    .from("studio_assets")
-    .select("id,path")
-    .eq("project_id", projectId)
-    .in("id", assetIds)
-    .in("kind", ["reference", "generated"]);
-
-  if (error || !assets) return {};
-
-  const entries = await Promise.all(
-    assets.map(async (a) => [a.id, await signImage(supabase, a.path)] as const),
-  );
-  return Object.fromEntries(entries);
+  const urls: Record<string, string> = {};
+  for (const id of assetIds) {
+    urls[id] = `/api/typography/preview-image/${encodeURIComponent(projectId)}/${encodeURIComponent(id)}`;
+  }
+  return urls;
 }
 
 export async function publishDraftImages(

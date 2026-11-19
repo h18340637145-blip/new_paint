@@ -1,5 +1,12 @@
-import { FONT_FAMILY_STACK, type DocumentTextStyle, type StructuredArticleDraft, type TextRun } from "./structured";
+import {
+  FONT_FAMILY_STACK,
+  runsToPlainText,
+  type DocumentTextStyle,
+  type StructuredArticleDraft,
+  type TextRun,
+} from "./structured";
 import type { TemplateStyleConfig } from "./types";
+import { renderXiumiPresetHtml } from "./xiumi-presets";
 
 const DEFAULT_WECHAT_FONT =
   "-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif";
@@ -255,6 +262,8 @@ export function renderWechatHtml(markdown: string, rawStyle: TemplateStyleConfig
   let inCode = false;
   let codeLang = "";
   let codeLines: string[] = [];
+  let inPresetId: string | null = null;
+  let presetLines: string[] = [];
   let tableRows: string[][] = [];
 
   const flushList = () => {
@@ -276,8 +285,64 @@ export function renderWechatHtml(markdown: string, rawStyle: TemplateStyleConfig
     tableRows = [];
   };
 
+  const flushPreset = () => {
+    if (!inPresetId) return;
+    const pid = inPresetId;
+    const rawBody = presetLines.join("\n").trim();
+    inPresetId = null;
+    presetLines = [];
+
+    const imgMatch = /!\[([^\]]*)\]\(([^)]+)\)/.exec(rawBody);
+    const innerHtml = rawBody
+      ? rawBody
+          .split("\n")
+          .map((line) => formatInlineMarkdown(line, style))
+          .join("<br />")
+      : "";
+    if (pid === "heading-dual-badge") {
+      h2Counter.count += 1;
+    }
+    const rendered = renderXiumiPresetHtml(
+      pid,
+      {
+        innerHtml,
+        rawText: rawBody,
+        imageSrc: imgMatch ? imgMatch[2] : undefined,
+        imageAlt: imgMatch ? imgMatch[1] : undefined,
+        imageCaption: imgMatch ? imgMatch[1] : undefined,
+        badgeIndex: h2Counter.count || 1,
+      },
+      style,
+      escapeHtml,
+      safeUrl,
+    );
+    if (rendered) {
+      blocks.push(rendered);
+    } else if (innerHtml) {
+      blocks.push(renderParagraphHtml(innerHtml, style));
+    }
+  };
+
   for (const rawLine of lines) {
     const trimmed = rawLine.trim();
+
+    if (inPresetId) {
+      if (trimmed === ":::") {
+        flushPreset();
+      } else {
+        presetLines.push(rawLine);
+      }
+      continue;
+    }
+
+    const presetOpen = !inCode ? /^:::preset\[([a-z0-9-]+)\]$/i.exec(trimmed) : null;
+    if (presetOpen) {
+      flushList();
+      flushTable();
+      inPresetId = presetOpen[1].toLowerCase();
+      presetLines = [];
+      continue;
+    }
 
     if (trimmed.startsWith("```")) {
       flushList();
@@ -367,6 +432,7 @@ export function renderWechatHtml(markdown: string, rawStyle: TemplateStyleConfig
   }
   flushList();
   flushTable();
+  flushPreset();
   if (inCode && codeLines.length > 0) {
     blocks.push(renderCodeBlock(codeLines.join("\n"), codeLang, style));
   }
@@ -425,8 +491,11 @@ function renderRunsHtml(
  * Shared renderer for StructuredArticleDraft (used identically by Preview and Copy-to-WeChat).
  */
 export function renderStructuredArticleHtml(
-  draft: Pick<StructuredArticleDraft, "title" | "templateStyle" | "documentStyle" | "blocks">,
+  draft: Pick<StructuredArticleDraft, "title" | "templateStyle" | "documentStyle" | "blocks"> & {
+    projectId?: string;
+  },
   imageUrls: Record<string, string>,
+  options?: { forExport?: boolean },
 ): string {
   const baseStyle = sanitizeStyle(draft.templateStyle);
   const doc = draft.documentStyle ?? {};
@@ -459,43 +528,130 @@ export function renderStructuredArticleHtml(
     htmlBlocks.push(renderHeadingHtml(1, escapeHtml(draft.title.trim()), effectiveStyle, h2Counter));
   }
 
+  const attachBlockId = (html: string, blockId: string) =>
+    html.replace(/^<([a-z0-9]+)/i, `<$1 data-block-id="${escapeHtml(blockId)}"`);
+
   for (const block of draft.blocks) {
-    if (block.type === "heading") {
+    if (block.type === "preset") {
+      const inner = renderRunsHtml(block.runs, effectiveStyle, doc, false);
+      const rawText = runsToPlainText(block.runs);
+      if (block.presetId === "heading-dual-badge") h2Counter.count += 1;
+      const presetHtml = renderXiumiPresetHtml(
+        block.presetId,
+        { innerHtml: inner, rawText, badgeIndex: h2Counter.count || 1 },
+        effectiveStyle,
+        escapeHtml,
+        safeUrl,
+      );
+      if (presetHtml) {
+        htmlBlocks.push(attachBlockId(presetHtml, block.id));
+      } else if (inner.trim()) {
+        htmlBlocks.push(attachBlockId(renderParagraphHtml(inner, effectiveStyle), block.id));
+      }
+    } else if (block.type === "heading") {
       const inner = renderRunsHtml(block.runs, effectiveStyle, doc, true);
       if (inner.trim()) {
-        htmlBlocks.push(renderHeadingHtml(block.level, inner, effectiveStyle, h2Counter));
+        if (block.presetId) {
+          if (block.presetId === "heading-dual-badge") h2Counter.count += 1;
+          const presetHtml = renderXiumiPresetHtml(
+            block.presetId,
+            { innerHtml: inner, rawText: runsToPlainText(block.runs), badgeIndex: h2Counter.count || 1 },
+            effectiveStyle,
+            escapeHtml,
+            safeUrl,
+          );
+          if (presetHtml) {
+            htmlBlocks.push(attachBlockId(presetHtml, block.id));
+            continue;
+          }
+        }
+        htmlBlocks.push(attachBlockId(renderHeadingHtml(block.level, inner, effectiveStyle, h2Counter), block.id));
       }
     } else if (block.type === "paragraph") {
       const inner = renderRunsHtml(block.runs, effectiveStyle, doc, false);
       if (inner.trim()) {
-        htmlBlocks.push(renderParagraphHtml(inner, effectiveStyle));
+        if (block.presetId) {
+          if (block.presetId === "heading-dual-badge") h2Counter.count += 1;
+          const presetHtml = renderXiumiPresetHtml(
+            block.presetId,
+            { innerHtml: inner, rawText: runsToPlainText(block.runs), badgeIndex: h2Counter.count || 1 },
+            effectiveStyle,
+            escapeHtml,
+            safeUrl,
+          );
+          if (presetHtml) {
+            htmlBlocks.push(attachBlockId(presetHtml, block.id));
+            continue;
+          }
+        }
+        htmlBlocks.push(attachBlockId(renderParagraphHtml(inner, effectiveStyle), block.id));
       }
     } else if (block.type === "blockquote") {
       const inner = renderRunsHtml(block.runs, effectiveStyle, doc, false);
       if (inner.trim()) {
-        htmlBlocks.push(renderBlockquoteHtml(inner, effectiveStyle));
+        if (block.presetId) {
+          const presetHtml = renderXiumiPresetHtml(
+            block.presetId,
+            { innerHtml: inner, rawText: runsToPlainText(block.runs), badgeIndex: h2Counter.count || 1 },
+            effectiveStyle,
+            escapeHtml,
+            safeUrl,
+          );
+          if (presetHtml) {
+            htmlBlocks.push(attachBlockId(presetHtml, block.id));
+            continue;
+          }
+        }
+        htmlBlocks.push(attachBlockId(renderBlockquoteHtml(inner, effectiveStyle), block.id));
       }
     } else if (block.type === "list") {
       const items = block.items
         .map((item) => renderRunsHtml(item.runs, effectiveStyle, doc, false))
         .filter((s) => s.trim().length > 0);
       if (items.length > 0) {
-        htmlBlocks.push(renderListItemsHtml(block.ordered ? "ol" : "ul", items, effectiveStyle));
+        htmlBlocks.push(attachBlockId(renderListItemsHtml(block.ordered ? "ol" : "ul", items, effectiveStyle), block.id));
       }
     } else if (block.type === "image") {
-      const src = imageUrls[block.assetId] ?? "";
+      const explicitUrl = imageUrls[block.assetId] ?? "";
+      const src =
+        explicitUrl
+        || (!options?.forExport && draft.projectId
+          ? `/api/typography/preview-image/${encodeURIComponent(draft.projectId)}/${encodeURIComponent(block.assetId)}`
+          : "");
       if (src) {
-        htmlBlocks.push(
-          renderImageHtml(
-            escapeHtml(block.alt || "文章配图"),
-            src,
+        if (block.presetId) {
+          const presetHtml = renderXiumiPresetHtml(
+            block.presetId,
+            {
+              innerHtml: "",
+              rawText: block.caption || block.alt || "",
+              imageSrc: src,
+              imageAlt: block.alt || "文章配图",
+              imageCaption: block.caption,
+            },
             effectiveStyle,
-            block.caption ? escapeHtml(block.caption) : undefined,
+            escapeHtml,
+            safeUrl,
+          );
+          if (presetHtml) {
+            htmlBlocks.push(attachBlockId(presetHtml, block.id));
+            continue;
+          }
+        }
+        htmlBlocks.push(
+          attachBlockId(
+            renderImageHtml(
+              escapeHtml(block.alt || "文章配图"),
+              src,
+              effectiveStyle,
+              block.caption ? escapeHtml(block.caption) : undefined,
+            ),
+            block.id,
           ),
         );
       }
     } else if (block.type === "divider") {
-      htmlBlocks.push(renderDividerHtml(effectiveStyle));
+      htmlBlocks.push(attachBlockId(renderDividerHtml(effectiveStyle), block.id));
     }
   }
 
@@ -505,6 +661,8 @@ export function renderStructuredArticleHtml(
 export function countArticleStats(markdown: string) {
   const plain = markdown
     .replace(/```[\s\S]*?```/g, " ")
+    .replace(/^:::preset\[[a-z0-9-]+\]$/gim, " ")
+    .replace(/^:::$/gm, " ")
     .replace(/!\[[^\]]*\]\([^)]+\)/g, " ")
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
     .replace(/[#>*`~\-|]/g, " ")

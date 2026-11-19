@@ -34,8 +34,40 @@ import {
 import { sendAgentMessage } from "@/lib/studio/agent-client";
 import type { StudioAgentTurn, StudioAttachment, StudioPlacedNode } from "@/lib/studio/agent-events";
 import { studioRequest, submitGeneration, uploadReference } from "@/lib/studio/client";
-import { configLabel, models } from "@/lib/studio/models";
+import { configLabel, imageTypes, maxReferenceSize, models } from "@/lib/studio/models";
 import type { CanvasJob, CanvasSubmission, ImageAsset } from "@/lib/studio/types";
+
+async function normalizePastedImage(file: File): Promise<File> {
+  const stamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+  if (imageTypes.includes(file.type)) {
+    const ext = file.type === "image/jpeg" ? "jpg" : file.type.split("/")[1];
+    const safeName = file.name && /\.(jpe?g|png|webp)$/i.test(file.name)
+      ? file.name
+      : `pasted-${stamp}.${ext}`;
+    return new File([file], safeName, { type: file.type });
+  }
+
+  const bitmapUrl = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error("无法解析剪贴板中的图片格式。"));
+      el.src = bitmapUrl;
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = img.naturalWidth || img.width;
+    canvas.height = img.naturalHeight || img.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("无法转换剪贴板图片。");
+    ctx.drawImage(img, 0, 0);
+    const pngBlob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+    if (!pngBlob) throw new Error("无法编码剪贴板图片。");
+    return new File([pngBlob], `pasted-${stamp}.png`, { type: "image/png" });
+  } finally {
+    URL.revokeObjectURL(bitmapUrl);
+  }
+}
 
 type NodeSize = { x: number; y: number; width: number };
 type ImageNodeData = ({ job: CanvasJob } | { placed: StudioPlacedNode }) & {
@@ -174,6 +206,7 @@ export function CanvasWorkspace({
   const [selectedChainHeadId, setSelectedChainHeadId] = useState<string | null>(null);
   const [stagingOpen, setStagingOpen] = useState(false);
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([]);
+  const [pastingImage, setPastingImage] = useState(false);
 
   const [attachments, setAttachments] = useState<StudioAttachment[]>([]);
   const [mode, setMode] = useState<StudioMode>("image");
@@ -297,10 +330,11 @@ export function CanvasWorkspace({
   );
 
   const commitTextNode = useCallback(
-    (id: string, override?: Partial<ArticleTextNodeRecord>) => {
+    (id: string, override?: Partial<ArticleTextNodeRecord> | string) => {
       const target = textNodesRef.current.find((n) => n.id === id);
       if (!target) return;
-      const merged = { ...target, ...override };
+      const patch = typeof override === "string" ? { content: override } : override;
+      const merged = { ...target, ...patch };
       const pos = positions[id] ?? { x: merged.x, y: merged.y };
       const w = nodeWidths[id] ?? merged.width;
       void articleApi({
@@ -573,7 +607,40 @@ export function CanvasWorkspace({
       });
   }
 
+  useEffect(() => {
+    async function handleWindowPaste(event: ClipboardEvent) {
+      const items = Array.from(event.clipboardData?.items ?? []);
+      const imageFiles = items
+        .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+        .map((item) => item.getAsFile())
+        .filter((f): f is File => f !== null);
+
+      if (imageFiles.length === 0) return;
+      event.preventDefault();
+      setPastingImage(true);
+      setError("");
+      try {
+        for (const rawFile of imageFiles) {
+          const normalized = await normalizePastedImage(rawFile);
+          if (!normalized.size || normalized.size > maxReferenceSize) {
+            throw new Error("粘贴的图片不能超过 10 MB。");
+          }
+          await uploadReference(normalized, project.id, crypto.randomUUID(), false, true);
+        }
+        await sync();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "粘贴图片上传失败，请重试。");
+      } finally {
+        setPastingImage(false);
+      }
+    }
+
+    window.addEventListener("paste", handleWindowPaste);
+    return () => window.removeEventListener("paste", handleWindowPaste);
+  }, [project.id, sync]);
+
   function canvasKeyDown(event: React.KeyboardEvent<HTMLElement>) {
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     const target = event.target;
     if (target instanceof Element && target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])")) return;
     const key = event.key.toLowerCase();
@@ -913,6 +980,15 @@ export function CanvasWorkspace({
             <button type="button" className="underline" onClick={() => setSelecting(false)}>
               取消
             </button>
+          </div>
+        )}
+        {pastingImage && (
+          <div
+            role="status"
+            className="absolute left-1/2 top-3 z-20 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full bg-neutral-950 px-4 py-2 text-xs text-white shadow-lg"
+          >
+            <LoaderCircle size={13} className="animate-spin" />
+            正在将粘贴的图片存入素材库并放入画布…
           </div>
         )}
       </section>
