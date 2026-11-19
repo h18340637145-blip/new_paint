@@ -16,8 +16,10 @@
 | GPT Image 2 文生图 | `gpt-image-2-text-to-image` | `prompt`、`aspect_ratio`、`resolution` |
 | GPT Image 2 图生图 | `gpt-image-2-image-to-image` | 上述字段加 `input_urls: [参考图地址]` |
 | Nano Banana 2 | `nano-banana-2` | `prompt`、`aspect_ratio`、`resolution`，有参考图时传 `image_input: [参考图地址]` |
+| Seedream 5.5 文生图 | `seedream/5-5-text-to-image` | `prompt`（5–5000 字符）、`aspect_ratio`（`auto` 归一为 `1:1`）、`size`（`1K`/`1.5K`/`2K`）、`output_format: "png"` |
+| Seedream 5.5 图生图 | `seedream/5-5-image-to-image` | `prompt`（5–5000 字符）、`image_urls: [参考图地址]`、`aspect_ratio`、`size`（`1K`/`1.5K`/`2K`）、`output_format: "png"` |
 
-默认模型为 Nano Banana 2，两个模型默认使用 `1K · 1:1`。客户端和服务端共用参数校验。提示词去除首尾空白后必填，上限 20,000 字符。GPT Image 2 的 2K 排除 `5:4`、`4:5`、`3:1`、`1:3`、`9:21`，4K 排除 `3:1`、`1:3`、`9:21`。各模型支持的选项以 [GPT Image 2 文生图](./gpt-image-2-text-to-image.md)、[GPT Image 2 图生图](./gpt-image-2-image-to-image.md)、[Nano Banana 2](./nanobanana2.md) 为准。
+默认模型为 Nano Banana 2，默认使用 `1K · 1:1`。客户端和服务端共用参数校验。Nano Banana 2 与 GPT Image 2 提示词去除首尾空白后必填、上限 20,000 字符；Seedream 5.5 提示词长度需为 5–5,000 字符，分辨率档位支持 `1K`、`1.5K`、`2K`（切换至 Seedream 5.5 时若原为 `4K` 自动切换为 `2K`）。GPT Image 2 的 2K 排除 `5:4`、`4:5`、`3:1`、`1:3`、`9:21`，4K 排除 `3:1`、`1:3`、`9:21`。各模型支持的选项以 [GPT Image 2 文生图](./gpt-image-2-text-to-image.md)、[GPT Image 2 图生图](./gpt-image-2-image-to-image.md)、[Nano Banana 2](./nanobanana2.md)、[Seedream 5.5 文生图](./seedream-5-5-text-to-image.md)、[Seedream 5.5 图生图](./seedream-5-5-image-to-image.md) 为准。
 
 1. 服务端校验登录、项目归属、参考图归属、参数及提交标识，先记录本地任务，再调用 `POST /api/v1/jobs/createTask` 并保存返回的 Kie.ai 任务 ID。检查 HTTP 状态与响应体 `code`。
 2. 首版由页面向应用服务端查询状态，服务端按任务节流查询 `GET /api/v1/jobs/recordInfo`。上游的 `waiting`、`queuing` 和 `generating` 均显示为生成中。刷新或重新进入项目后，从已保存的任务恢复查询。[Kie.ai 任务查询文档](https://docs.kie.ai/market/common/get-task-detail)

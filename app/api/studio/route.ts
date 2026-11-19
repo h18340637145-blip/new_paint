@@ -1,7 +1,7 @@
 import { after, NextResponse } from "next/server";
 import { requireStudioMember, studioAdmin, StudioError } from "@/lib/studio/auth";
 import { ensureSubmission, readCanvas, refreshJobs, startPending } from "@/lib/studio/generation";
-import { imageTypes, maxPromptLength, maxReferenceSize, validConfig } from "@/lib/studio/models";
+import { imageTypes, maxReferenceSize, promptBounds, validConfig } from "@/lib/studio/models";
 import { bucket, readProject, uuidPattern } from "@/lib/studio/projects";
 import { saveImage, signImage } from "@/lib/studio/storage";
 import { attachmentFilename, markdownFilename, markdownMime, maxMarkdownBytes } from "@/lib/studio/attachment-types";
@@ -99,9 +99,16 @@ export async function POST(request: Request) {
     if (action === "submit") {
       const submissionId = requireUuid(body.submissionId);
       const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-      if (!prompt || prompt.length > maxPromptLength || !validConfig(body.config)
-        || body.config.model === "gpt-image-2-5-flare") {
+      if (!validConfig(body.config) || body.config.model === "gpt-image-2-5-flare") {
         throw new StudioError("请检查提示词和模型配置。");
+      }
+      const bounds = promptBounds(body.config.model);
+      if (prompt.length < bounds.min || prompt.length > bounds.max) {
+        throw new StudioError(
+          body.config.model === "seedream-5-5"
+            ? "Seedream 5.5 提示词长度需在 5–5,000 个字符之间。"
+            : "请检查提示词和模型配置。",
+        );
       }
       const referenceId = body.referenceId == null ? null : requireUuid(body.referenceId);
       if (referenceId) {

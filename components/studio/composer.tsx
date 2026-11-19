@@ -1,11 +1,21 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { NanoBanana, OpenAI } from "@lobehub/icons";
+import { ByteDance, NanoBanana, OpenAI } from "@lobehub/icons";
 import { ArrowUp, ChevronDown, ImagePlus, LayoutGrid, LoaderCircle, Paperclip, Plus, X } from "lucide-react";
 import {
-  configLabel, defaultConfig, imageTypes, maxPromptLength, maxReferenceSize,
-  manualModels, models, resolutions, supportedRatios, type GenerationConfig,
+  configLabel,
+  defaultConfig,
+  imageTypes,
+  manualModels,
+  maxPromptLength,
+  maxReferenceSize,
+  models,
+  promptBounds,
+  supportedRatios,
+  supportedResolutions,
+  type GenerationConfig,
+  type Model,
 } from "@/lib/studio/models";
 import type { ImageAsset } from "@/lib/studio/types";
 import { SkillPicker } from "./skill-picker";
@@ -22,6 +32,12 @@ export interface ComposerInput {
   asset: ImageAsset | null;
   attachments?: StudioAttachment[];
   skill?: StudioSkill | null;
+}
+
+function getModelIcon(model: Model) {
+  if (model === "gpt-image-2" || model === "gpt-image-2-5-flare") return OpenAI;
+  if (model === "seedream-5-5") return ByteDance;
+  return NanoBanana;
 }
 
 export function Composer({
@@ -71,9 +87,16 @@ export function Composer({
   }
 
   function changeConfig(next: GenerationConfig) {
-    const ratios = supportedRatios(next.model, next.resolution);
+    const allowedRes = supportedResolutions(next.model);
+    const resolution = allowedRes.includes(next.resolution)
+      ? next.resolution
+      : next.model === "seedream-5-5"
+        ? "2K"
+        : "1K";
+    const ratios = supportedRatios(next.model, resolution);
     setConfig({
       ...next,
+      resolution,
       aspectRatio: ratios.includes(next.aspectRatio) ? next.aspectRatio : "1:1",
       count: next.model === "gpt-image-2" ? next.count : 1,
     });
@@ -83,6 +106,17 @@ export function Composer({
     event.preventDefault();
     const value = prompt.trim();
     if (!maySend || submitInProgress.current || selecting || uploading || skillMutating) return;
+    if (!isAgent) {
+      const bounds = promptBounds(config.model);
+      if (value.length < bounds.min || value.length > bounds.max) {
+        setError(
+          config.model === "seedream-5-5"
+            ? "Seedream 5.5 提示词长度需在 5–5,000 个字符之间。"
+            : "请检查提示词长度。",
+        );
+        return;
+      }
+    }
     submitInProgress.current = true;
     setPending(true);
     setError("");
@@ -136,7 +170,9 @@ export function Composer({
     }
   }
 
-  const ModelIcon = config.model === "gpt-image-2" ? OpenAI : NanoBanana;
+  const ModelIcon = getModelIcon(config.model);
+  const modelResolutions = supportedResolutions(config.model);
+  const currentBounds = promptBounds(config.model);
 
   return (
     <form onSubmit={send}
@@ -195,75 +231,79 @@ export function Composer({
         placeholder={home ? "描述你想创作的图片" : "今天我们要创作什么"}
         value={prompt}
         disabled={pending}
-        maxLength={maxPromptLength}
-        onChange={(event) => setPrompt(event.target.value)}
+        maxLength={isAgent ? maxPromptLength : currentBounds.max}
+        onChange={(event) => {
+          setPrompt(event.target.value);
+          if (error) setError("");
+        }}
       />
       {error && <p className="px-1 pb-2 text-xs text-red-700" role="alert">{error}</p>}
       <div className="flex items-end gap-2">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-        {!home && onModeChange && (
-          <ModeMenu mode={mode} disabled={busy || generating} onChange={(value) => {
-            setMenu(null);
-            onModeChange(value);
-          }} />
-        )}
-        {home ? (
-          <button type="button" disabled={pending} aria-label="上传参考图" className="rounded-lg p-1.5 hover:bg-neutral-100" onClick={() => input.current?.click()}>
-            <Plus size={17} />
-          </button>
-        ) : mode === "agent" ? (
-          <span className="px-2 text-xs text-neutral-600">Agent自动规划</span>
-        ) : (
-          <>
-            <div className="relative">
-              <button type="button" title={models[config.model]} aria-label="选择模型" aria-expanded={menu === "model"} disabled={pending}
-                className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs hover:bg-neutral-100" onClick={() => setMenu(menu === "model" ? null : "model")}>
-                <ModelIcon size={16} /><span>图像</span><ChevronDown size={13} />
-              </button>
-              {menu === "model" && (
-                <div className="absolute bottom-full left-0 z-30 mb-2 grid min-w-40 rounded-xl border border-neutral-200 bg-white p-1.5 text-sm shadow-lg">
-                  {manualModels.map((model) => {
-                    const Icon = model === "gpt-image-2" ? OpenAI : NanoBanana;
-                    return <button key={model} type="button" aria-pressed={model === config.model}
-                      className="flex items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-neutral-100 aria-pressed:bg-neutral-100"
-                      onClick={() => { changeConfig({ ...config, model }); setMenu(null); }}><Icon size={16} />{models[model]}</button>;
-                  })}
-                </div>
-              )}
-            </div>
-            <div className="relative">
-              <button type="button" aria-expanded={menu === "settings"} aria-label={`配置 ${configLabel(config)}`} disabled={pending}
-                className="flex h-8 items-center gap-1 rounded-lg px-2 text-xs hover:bg-neutral-100" onClick={() => setMenu(menu === "settings" ? null : "settings")}>
-                {configLabel(config)}<ChevronDown size={13} />
-              </button>
-              {menu === "settings" && (
-                <div className="absolute bottom-full left-0 z-30 mb-2 grid w-60 gap-2 rounded-xl border border-neutral-200 bg-white p-3 text-xs shadow-lg">
-                  <p className="font-semibold">{models[config.model]}</p>
-                  <p>分辨率</p>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    {resolutions.map((resolution) => <button type="button" key={resolution} aria-pressed={resolution === config.resolution}
-                      className="rounded-lg border border-neutral-200 py-1.5 hover:bg-neutral-100 aria-pressed:bg-neutral-200"
-                      onClick={() => changeConfig({ ...config, resolution })}>{resolution}</button>)}
+          {!home && onModeChange && (
+            <ModeMenu mode={mode} disabled={busy || generating} onChange={(value) => {
+              setMenu(null);
+              onModeChange(value);
+            }} />
+          )}
+          {home && (
+            <button type="button" disabled={pending} aria-label="上传参考图" className="rounded-lg p-1.5 hover:bg-neutral-100" onClick={() => input.current?.click()}>
+              <Plus size={17} />
+            </button>
+          )}
+          {!home && mode === "agent" ? (
+            <span className="px-2 text-xs text-neutral-600">Agent自动规划</span>
+          ) : (
+            <>
+              <div className="relative">
+                <button type="button" title={models[config.model]} aria-label="选择模型" aria-expanded={menu === "model"} disabled={pending}
+                  className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs hover:bg-neutral-100" onClick={() => setMenu(menu === "model" ? null : "model")}>
+                  <ModelIcon size={16} /><span>{models[config.model]}</span><ChevronDown size={13} />
+                </button>
+                {menu === "model" && (
+                  <div className="absolute bottom-full left-0 z-30 mb-2 grid min-w-44 rounded-xl border border-neutral-200 bg-white p-1.5 text-sm shadow-lg">
+                    {manualModels.map((model) => {
+                      const Icon = getModelIcon(model);
+                      return <button key={model} type="button" aria-pressed={model === config.model}
+                        className="flex items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-neutral-100 aria-pressed:bg-neutral-100"
+                        onClick={() => { changeConfig({ ...config, model }); setMenu(null); }}><Icon size={16} />{models[model]}</button>;
+                    })}
                   </div>
-                  <p>宽高比</p>
-                  <div className="grid grid-cols-4 gap-1.5">
-                    {supportedRatios(config.model, config.resolution).map((aspectRatio) => <button type="button" key={aspectRatio} aria-pressed={aspectRatio === config.aspectRatio}
-                      className="grid min-h-10 place-items-center rounded-lg border border-neutral-200 p-1 hover:bg-neutral-100 aria-pressed:bg-neutral-200"
-                      onClick={() => changeConfig({ ...config, aspectRatio })}>{aspectRatio === "auto" ? "自动" : aspectRatio}</button>)}
-                  </div>
-                  {config.model === "gpt-image-2" && <>
-                    <p>生成张数</p>
-                    <div className="grid grid-cols-5 gap-1">
-                      {[1, 2, 3, 4, 5].map((count) => <button type="button" key={count} aria-pressed={count === config.count}
+                )}
+              </div>
+              <div className="relative">
+                <button type="button" aria-expanded={menu === "settings"} aria-label={`配置 ${configLabel(config)}`} disabled={pending}
+                  className="flex h-8 items-center gap-1 rounded-lg px-2 text-xs hover:bg-neutral-100" onClick={() => setMenu(menu === "settings" ? null : "settings")}>
+                  {configLabel(config)}<ChevronDown size={13} />
+                </button>
+                {menu === "settings" && (
+                  <div className="absolute bottom-full left-0 z-30 mb-2 grid w-60 gap-2 rounded-xl border border-neutral-200 bg-white p-3 text-xs shadow-lg">
+                    <p className="font-semibold">{models[config.model]}</p>
+                    <p>分辨率</p>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {modelResolutions.map((resolution) => <button type="button" key={resolution} aria-pressed={resolution === config.resolution}
                         className="rounded-lg border border-neutral-200 py-1.5 hover:bg-neutral-100 aria-pressed:bg-neutral-200"
-                        onClick={() => changeConfig({ ...config, count })}>{count}</button>)}
+                        onClick={() => changeConfig({ ...config, resolution })}>{resolution}</button>)}
                     </div>
-                  </>}
-                </div>
-              )}
-            </div>
-          </>
-        )}
+                    <p>宽高比</p>
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {supportedRatios(config.model, config.resolution).map((aspectRatio) => <button type="button" key={aspectRatio} aria-pressed={aspectRatio === config.aspectRatio}
+                        className="grid min-h-10 place-items-center rounded-lg border border-neutral-200 p-1 hover:bg-neutral-100 aria-pressed:bg-neutral-200"
+                        onClick={() => changeConfig({ ...config, aspectRatio })}>{aspectRatio === "auto" ? "自动" : aspectRatio}</button>)}
+                    </div>
+                    {config.model === "gpt-image-2" && <>
+                      <p>生成张数</p>
+                      <div className="grid grid-cols-5 gap-1">
+                        {[1, 2, 3, 4, 5].map((count) => <button type="button" key={count} aria-pressed={count === config.count}
+                          className="rounded-lg border border-neutral-200 py-1.5 hover:bg-neutral-100 aria-pressed:bg-neutral-200"
+                          onClick={() => changeConfig({ ...config, count })}>{count}</button>)}
+                      </div>
+                    </>}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </div>
         <button type="submit" aria-label="发送" disabled={!maySend || busy || selecting}
           className="grid size-8 shrink-0 place-items-center rounded-full bg-neutral-900 text-white hover:bg-neutral-700 disabled:bg-neutral-100 disabled:text-neutral-400">

@@ -72,6 +72,12 @@ export async function ensureSubmissions(database: SupabaseClient, project: Proje
   const { error: insertError } = await database.from("studio_submissions")
     .upsert(rows, { onConflict: "id", ignoreDuplicates: true });
   if (insertError?.code === "PZ001") throw new StudioError("本月剩余生图额度不足，可在个人中心查看额度或订阅 Pro。", 429);
+  if (insertError?.code === "23514") {
+    throw new StudioError(
+      "数据库尚未更新 Seedream 模型约束，请先在 Supabase SQL Editor 执行迁移文件 supabase/migrations/20261119150000_add_seedream_model.sql。",
+      503,
+    );
+  }
   if (insertError) throw new StudioError("无法记录本次生图请求。", 503);
 
   const { data: saved, error } = await database.from("studio_submissions").select("*")

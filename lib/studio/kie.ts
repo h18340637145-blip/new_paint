@@ -48,17 +48,41 @@ async function kieRequest<T>(path: string, method: "GET" | "POST", body?: object
   return payload.data;
 }
 
-export async function createKieTask(prompt: string, config: GenerationConfig, referenceUrls: string[] = []) {
+export function buildKieTaskPayload(
+  prompt: string,
+  config: GenerationConfig,
+  referenceUrls: string[] = [],
+): { model: string; input: Record<string, unknown> } {
+  if (config.model === "seedream-5-5") {
+    const hasReference = referenceUrls.length > 0;
+    return {
+      model: hasReference ? "seedream/5-5-image-to-image" : "seedream/5-5-text-to-image",
+      input: {
+        prompt,
+        aspect_ratio: !hasReference && config.aspectRatio === "auto" ? "1:1" : config.aspectRatio,
+        size: config.resolution,
+        output_format: "png",
+        ...(hasReference ? { image_urls: referenceUrls } : {}),
+      },
+    };
+  }
+
   const isNano = config.model === "nano-banana-2";
-  const model = isNano ? config.model
+  const model = isNano
+    ? config.model
     : `${config.model}-${referenceUrls.length ? "image-to-image" : "text-to-image"}`;
-  const input = {
+  const input: Record<string, unknown> = {
     prompt,
     aspect_ratio: config.aspectRatio,
     resolution: config.resolution,
     ...(referenceUrls.length ? { [isNano ? "image_input" : "input_urls"]: referenceUrls } : {}),
   };
-  const data = await kieRequest<{ taskId?: string }>("/api/v1/jobs/createTask", "POST", { model, input });
+  return { model, input };
+}
+
+export async function createKieTask(prompt: string, config: GenerationConfig, referenceUrls: string[] = []) {
+  const payload = buildKieTaskPayload(prompt, config, referenceUrls);
+  const data = await kieRequest<{ taskId?: string }>("/api/v1/jobs/createTask", "POST", payload);
   if (!data.taskId) throw new KieError("生图服务未返回任务编号。", true);
   return data.taskId;
 }

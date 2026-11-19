@@ -16,6 +16,8 @@
      - [GPT Image 2 文生图](./docs/api/gpt-image-2-text-to-image.md)
      - [GPT Image 2 图生图](./docs/api/gpt-image-2-image-to-image.md)
      - [Nano Banana 2 生图](./docs/api/nanobanana2.md)
+     - [Seedream 5.5 文生图](./docs/api/seedream-5-5-text-to-image.md)
+     - [Seedream 5.5 图生图](./docs/api/seedream-5-5-image-to-image.md)
 
 3. 需求沉淀规则
    - 当我和你讨论功能实现、产品需求、业务规则或交互细节时，如果某些需求已经明确，请及时整理并写入 `/docs/prd.md` 的文档
