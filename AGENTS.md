@@ -1,41 +1,31 @@
-请帮我在当前项目根目录初始 `AGENTS.md` 文件，用中文。
+# 创作工作台开发指引
 
-要求：
+本项目使用 Next.js App Router、React、TypeScript、Tailwind CSS 和 Supabase。优先沿用现有目录、技术栈与代码风格。面向本项目的文档和代码注释使用中文。
 
-1. 项目背景
-   - 说明这是一个基于 Next.js + Supabase 的项目。
-   - 后续开发需要优先遵循当前项目已有的技术栈、目录结构和代码风格。
+## 从任务找到资料
 
-2. 项目文档目录约定
-   - 相关项目文档统一放在 `/docs/` 目录下。
-   - `/docs/prd.md`：存放项目需求文档、功能规格、已确认的产品决策。
-   - `/docs/images/`：存放截图、界面参考图、流程图等图片资料。
-   - `/docs/api/`：存放 API 文档、接口约定、第三方服务对接说明。
-   - 生图模型 API 文档索引
-     - [项目生图接入设计](./docs/api/image-generation.md)
-     - [GPT Image 2 文生图](./docs/api/gpt-image-2-text-to-image.md)
-     - [GPT Image 2 图生图](./docs/api/gpt-image-2-image-to-image.md)
-     - [Nano Banana 2 生图](./docs/api/nanobanana2.md)
-     - [Seedream 5.5 文生图](./docs/api/seedream-5-5-text-to-image.md)
-     - [Seedream 5.5 图生图](./docs/api/seedream-5-5-image-to-image.md)
+| 任务 | 入口 |
+| --- | --- |
+| 找到业务入口、服务边界与数据流 | [架构地图](./ARCHITECTURE.md) |
+| 核对已确认需求 | [产品规格索引](./docs/product-specs/index.md) · [PRD](./docs/prd.md) |
+| 查设计决策与技术约束 | [设计文档索引](./docs/design-docs/index.md) · [核心原则](./docs/design-docs/core-beliefs.md) |
+| 设计界面、验证交互和排版 | [设计约定](./docs/DESIGN.md) · [前端约定](./docs/FRONTEND.md) |
+| 制订计划或接续已有任务 | [执行计划](./docs/PLANS.md) · [进行中](./docs/exec-plans/active/index.md) |
+| 核对上线证据和技术债 | [质量状态](./docs/QUALITY_SCORE.md) · [技术债清单](./docs/exec-plans/tech-debt-tracker.md) |
+| 处理失败、权限或数据库变更 | [可靠性](./docs/RELIABILITY.md) · [安全](./docs/SECURITY.md) · [数据库结构索引](./docs/generated/db-schema.md) |
+| 查截图、接口和第三方服务资料 | [参考资料](./docs/references/index.md) · [界面参考图](./docs/images/) |
 
-3. 需求沉淀规则
-   - 当我和你讨论功能实现、产品需求、业务规则或交互细节时，如果某些需求已经明确，请及时整理并写入 `/docs/prd.md` 的文档
-   - 写入 PRD 前，需要基于已经确认的信息，不要把未经确认的猜测当成最终需求。
-   - 如果需求还不完整，可以先记录为“待确认问题”或“开放问题”。
+## 变更与验证
 
-4. Supabase 操作规则
-   - 执行和 Supabase 相关的任务时，尽可能优先使用 Supabase MCP 完成操作，包括但不限于：
-     - 数据库表结构查看
-     - SQL 查询
-     - RLS 策略检查和创建
-     - Storage Bucket 的查看和创建
+- 产品、交互和业务规则确认后更新 [PRD](./docs/prd.md)。未决事项记为「待确认」，实现进度和验收证据记入执行计划。
+- 修改前查看对应模块和迁移，优先复用鉴权、存储及渲染逻辑。跨路由或涉及数据、支付、第三方服务的变更按 [执行计划](./docs/PLANS.md) 记录。
+- Supabase 表结构、SQL、RLS 和存储桶操作优先使用 Supabase MCP。迁移存放在 `supabase/migrations/`。数据库结构索引以仓库迁移为依据，环境状态通过目标项目核对。
+- 密钥、连接串和访问令牌仅在服务端管理。客户端配置使用 `NEXT_PUBLIC_` 且只包含允许公开的值。访问用户资源时应用当前会话、资源归属校验、RLS 和最小权限。
+- 通用验证使用 `npm run lint`、`npm run build`。按改动范围补充浏览器、外部服务或隔离环境验证，并把未实测的部分和静态检查分开记录。
 
-5. 安全和配置约定
-   - 不要把 Supabase service role key、数据库密码、访问令牌等敏感信息写入前端代码或提交到仓库。
-   - 前端只能使用 `NEXT_PUBLIC_` 开头的公开环境变量。
-   - 涉及用户数据访问时，需要优先考虑 RLS 策略和最小权限原则。
+## 生图接口
 
-6. 编辑方式
-   - 如果 `AGENTS.md` 已存在，请在保留原有有效内容的基础上合并更新，不要无意义覆盖。
-   - 如果 `/docs/`、`/docs/prd.md`、`/docs/images/`、`/docs/api/` 不存在，可以一并创建。
+- [项目生图接入设计](./docs/api/image-generation.md)
+- [GPT Image 2 文生图](./docs/api/gpt-image-2-text-to-image.md) · [GPT Image 2 图生图](./docs/api/gpt-image-2-image-to-image.md)
+- [Nano Banana 2 生图](./docs/api/nanobanana2.md)
+- [Seedream 5.5 文生图](./docs/api/seedream-5-5-text-to-image.md) · [Seedream 5.5 图生图](./docs/api/seedream-5-5-image-to-image.md)
