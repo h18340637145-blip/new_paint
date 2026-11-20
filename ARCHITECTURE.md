@@ -6,8 +6,9 @@
 | --- | --- | --- |
 | 账号与项目 | `/auth/*`、`/protected`、`/projects`，会话和项目归属从服务端核对 | Supabase Auth、成员与项目表 |
 | 画布与生图 | `/canvas`、`/api/studio`、`lib/studio`。React Flow 负责画布交互，服务端提交和同步 KIE 任务 | 素材、提交、图片任务、画布节点表及私有桶 |
-| Agent 与 Skill | `/api/studio/agent`、`/api/studio/skills`。Pi Agent 使用 DeepSeek Flash 规划，生图沿用 KIE 任务链路 | Agent 对话及项目级 Skill 表 |
+| Agent 与 Skill | `/api/studio/agent`、`/api/studio/skills`。Pi Agent 使用智谱 GLM-5.3（视觉辅助 GLM-5.3-Flash）共创提案、编排画布图文与连线，生图沿用 KIE 任务链路（默认 Seedream 5.5） | Agent 对话、项目级 Skill 表、文章文案节点与有向连线表 |
 | 文章与排版 | `/api/studio/article` 保存文章编排与暂存版本。`/typography`、`/api/typography/*` 负责 Qwen 排版、稿件精修与复制 | 文章图、快照、任务、排版稿、发布图片映射。普通 Markdown 编辑偏好保存在本地 |
+| 模板库与团队 | `/api/library/*`、`/api/teams`、`lib/typography/{custom-tree,import-parser,library-store}` 负责富文本/HTML/JSON 安全解析、受控组件树、个人库与团队库协作 | 团队、成员、站内邀请、库条目版本、私有库媒体引用及私有/公开存储桶 |
 | 订阅与额度 | `/profile`、`/api/checkout/providers/zpay/*`、`supabase/functions`。验签后的回调通过数据库事务入账 | ZPAY 订单、月度图片额度与服务端 Vault 配置 |
 
 ## 依赖与数据边界

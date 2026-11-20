@@ -99,6 +99,16 @@ export interface TypographyTheme {
   palettes: ColorPalette[];
 }
 
+import type { AppliedComponentSnapshot } from "./custom-tree";
+
+export interface AppliedLibraryTemplateMeta {
+  itemId: string | null;
+  name: string;
+  version: number;
+  style: TemplateStyleConfig;
+  sampleMarkdown: string;
+}
+
 export interface TypographyPersistedState {
   version: 2;
   activeSubTemplateId: string;
@@ -106,4 +116,6 @@ export interface TypographyPersistedState {
   hasEditedContent: boolean;
   styleOverrides: Record<string, TemplateStyleConfig>;
   drafts: Record<string, string>;
+  appliedSnapshots?: Record<string, AppliedComponentSnapshot>;
+  activeLibraryTemplate?: AppliedLibraryTemplateMeta | null;
 }

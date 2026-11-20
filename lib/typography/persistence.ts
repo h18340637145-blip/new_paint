@@ -1,5 +1,11 @@
 import { cloneStyleConfig, getSubTemplate, resolveSubTemplateId, TYPOGRAPHY_SUBTEMPLATES } from "./catalog";
-import type { HeadingStyleKind, TemplateStyleConfig, TypographyPersistedState } from "./types";
+import { validateAppliedSnapshot, type AppliedComponentSnapshot } from "./custom-tree";
+import type {
+  AppliedLibraryTemplateMeta,
+  HeadingStyleKind,
+  TemplateStyleConfig,
+  TypographyPersistedState,
+} from "./types";
 
 export const TYPOGRAPHY_STORAGE_KEY = "new_paint_typography_templates_v1";
 
@@ -208,6 +214,31 @@ export function migratePersistedState(rawJson: string | null): TypographyPersist
         ? parsed.hasEditedContent
         : typeof v1Draft === "string" && v1Draft !== activeSub.sampleMarkdown;
 
+    const appliedSnapshots: Record<string, AppliedComponentSnapshot> = {};
+    if (parsed.appliedSnapshots && typeof parsed.appliedSnapshots === "object") {
+      for (const [key, rawSnap] of Object.entries(parsed.appliedSnapshots as Record<string, unknown>)) {
+        const validated = validateAppliedSnapshot(rawSnap);
+        if (validated) {
+          appliedSnapshots[key] = validated;
+        }
+      }
+    }
+
+    let activeLibraryTemplate: AppliedLibraryTemplateMeta | null = null;
+    if (parsed.activeLibraryTemplate && typeof parsed.activeLibraryTemplate === "object") {
+      const tpl = parsed.activeLibraryTemplate as Record<string, unknown>;
+      if (typeof tpl.name === "string" && tpl.style && typeof tpl.style === "object") {
+        activeLibraryTemplate = {
+          itemId: typeof tpl.itemId === "string" ? tpl.itemId : null,
+          name: tpl.name.slice(0, 80),
+          version: typeof tpl.version === "number" && tpl.version >= 1 ? Math.floor(tpl.version) : 1,
+          style: mergeStyleOverride(activeSub.defaultStyle, tpl.style as Record<string, unknown>),
+          sampleMarkdown:
+            typeof tpl.sampleMarkdown === "string" ? tpl.sampleMarkdown : activeSub.sampleMarkdown,
+        };
+      }
+    }
+
     return {
       version: 2,
       activeSubTemplateId,
@@ -215,6 +246,8 @@ export function migratePersistedState(rawJson: string | null): TypographyPersist
       hasEditedContent,
       styleOverrides,
       drafts,
+      appliedSnapshots,
+      activeLibraryTemplate,
     };
   } catch {
     return fallback;

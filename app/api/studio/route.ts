@@ -6,6 +6,7 @@ import { bucket, readProject, uuidPattern } from "@/lib/studio/projects";
 import { saveImage, signImage } from "@/lib/studio/storage";
 import { attachmentFilename, markdownFilename, markdownMime, maxMarkdownBytes } from "@/lib/studio/attachment-types";
 import { readPlacedNodes } from "@/lib/studio/agent-data";
+import { readArticleWorkspace } from "@/lib/studio/article-data";
 
 export const maxDuration = 60;
 
@@ -35,13 +36,56 @@ export async function POST(request: Request) {
     const action = body.action;
 
     let project = await readProject(supabase, projectId);
-    if (!project && body.createProject === true && ["prepare-upload", "submit"].includes(action)) {
+    if (!project && body.createProject === true && ["prepare-upload", "submit", "create-project"].includes(action)) {
+      const initialTitle =
+        typeof body.title === "string" && body.title.trim()
+          ? body.title.trim().slice(0, 80)
+          : undefined;
       const { error } = await admin.from("studio_projects")
-        .upsert({ id: projectId, owner_id: userId }, { ignoreDuplicates: true });
+        .upsert(
+          { id: projectId, owner_id: userId, ...(initialTitle ? { title: initialTitle } : {}) },
+          { ignoreDuplicates: true },
+        );
       if (error) throw new StudioError("创建项目失败，请重试。", 503);
       project = await readProject(supabase, projectId);
     }
     if (!project) throw new StudioError("找不到项目。", 404);
+
+    if (action === "create-project") {
+      return NextResponse.json({ id: project.id, title: project.title }, { status: 201 });
+    }
+
+    if (action === "rename-project") {
+      if (project.owner_id !== userId) throw new StudioError("无权修改该项目。", 403);
+      const nextTitle = typeof body.title === "string" ? body.title.trim().slice(0, 80) : "";
+      if (!nextTitle) throw new StudioError("项目名称不能为空。", 400);
+      const { error } = await admin
+        .from("studio_projects")
+        .update({ title: nextTitle, updated_at: new Date().toISOString() })
+        .eq("id", projectId)
+        .eq("owner_id", userId);
+      if (error) throw new StudioError("重命名项目失败，请稍后重试。", 503);
+      return NextResponse.json({ id: projectId, title: nextTitle });
+    }
+
+    if (action === "delete-project") {
+      if (project.owner_id !== userId) throw new StudioError("无权删除该项目。", 403);
+      const { data: assets } = await admin
+        .from("studio_assets")
+        .select("path")
+        .eq("project_id", projectId);
+      const paths = (assets ?? []).map((a) => String(a.path)).filter(Boolean);
+      if (paths.length > 0) {
+        await admin.storage.from(bucket).remove(paths).catch(() => undefined);
+      }
+      const { error } = await admin
+        .from("studio_projects")
+        .delete()
+        .eq("id", projectId)
+        .eq("owner_id", userId);
+      if (error) throw new StudioError("删除项目失败，请稍后重试。", 503);
+      return NextResponse.json({ ok: true });
+    }
 
     if (action === "prepare-upload") {
       const assetId = requireUuid(body.assetId);
@@ -131,25 +175,35 @@ export async function POST(request: Request) {
 
     if (action === "sync") {
       await Promise.all([startPending(admin, project), refreshJobs(admin, project)]);
-      const [submissions, placedNodes] = await Promise.all([
-        readCanvas(supabase, projectId), readPlacedNodes(supabase, projectId),
+      const [submissions, placedNodes, article] = await Promise.all([
+        readCanvas(supabase, projectId),
+        readPlacedNodes(supabase, projectId),
+        readArticleWorkspace(supabase, projectId),
       ]);
-      return NextResponse.json({ submissions, placedNodes });
+      return NextResponse.json({
+        submissions,
+        placedNodes,
+        textNodes: article.textNodes,
+        articleEdges: article.edges,
+      });
     }
 
     if (action === "regenerate") {
       const id = requireUuid(body.submissionId);
       const newId = requireUuid(body.newId);
       const { data: original, error } = await supabase.from("studio_submissions")
-        .select("prompt,model,aspect_ratio,resolution,image_count,ordered_reference_ids")
-        .eq("project_id", projectId).eq("id", id).eq("model", "gpt-image-2-5-flare").maybeSingle();
-      if (error || !original) throw new StudioError("找不到可重新生成的 Agent 任务。", 404);
+        .select("prompt,model,aspect_ratio,resolution,image_count,reference_id,ordered_reference_ids")
+        .eq("project_id", projectId).eq("id", id).maybeSingle();
+      if (error || !original) throw new StudioError("找不到可重新生成的任务。", 404);
       const config = { model: original.model, aspectRatio: original.aspect_ratio,
         resolution: original.resolution, count: original.image_count };
       if (!validConfig(config)) throw new StudioError("原任务参数不可用。", 409);
       await ensureSubmission(admin, project, {
-        id: newId, prompt: original.prompt, config, referenceId: null,
-        orderedReferenceIds: original.ordered_reference_ids ?? [],
+        id: newId,
+        prompt: original.prompt,
+        config,
+        referenceId: original.reference_id ?? null,
+        orderedReferenceIds: original.ordered_reference_ids ?? undefined,
       });
       return NextResponse.json({ ok: true }, { status: 202 });
     }

@@ -27,6 +27,20 @@ export interface StudioAgentTurn {
   createdAt: string;
 }
 
+export interface CreativePlanStep {
+  order: number;
+  kind: "text" | "image";
+  role?: "material" | "verbatim" | "requirement";
+  brief: string;
+}
+
+export interface CreativePlanProposal {
+  title: string;
+  summary: string;
+  recommendedModel: "seedream-5-5" | "nano-banana-2" | "gpt-image-2";
+  steps: CreativePlanStep[];
+}
+
 export interface StudioPlacedNode {
   id: string;
   x: number;

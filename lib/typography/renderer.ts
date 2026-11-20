@@ -1,4 +1,10 @@
 import {
+  collectLibraryMediaIds,
+  renderComponentTreeHtml,
+  type AppliedComponentSnapshot,
+  type ComponentImageRef,
+} from "./custom-tree";
+import {
   FONT_FAMILY_STACK,
   runsToPlainText,
   type DocumentTextStyle,
@@ -252,27 +258,120 @@ function renderTable(rows: string[][], style: TemplateStyleConfig) {
   return `<table style="width:100%;border-collapse:collapse;margin:${paragraph.marginTop}px 0 ${paragraph.marginBottom}px 0;font-size:${Math.max(13, paragraph.fontSize - 1)}px;line-height:1.6;"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
 }
 
-export function renderWechatHtml(markdown: string, rawStyle: TemplateStyleConfig) {
+export interface RenderWechatMarkdownOptions {
+  snapshots?: Record<string, AppliedComponentSnapshot>;
+  libraryMediaUrls?: Record<string, string>;
+  forExport?: boolean;
+}
+
+export function extractMarkdownSnapshotMediaIds(
+  markdown: string,
+  snapshots?: Record<string, AppliedComponentSnapshot>,
+): string[] {
+  const mediaIds = new Set<string>();
+
+  // 提取正文中直接粘贴引用的私有库图片 /api/library/media/<uuid>
+  const directMediaRe = /\/api\/library\/media\/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/g;
+  let dm: RegExpExecArray | null;
+  while ((dm = directMediaRe.exec(markdown)) !== null) {
+    mediaIds.add(dm[1]);
+  }
+
+  if (snapshots) {
+    const usedSnapIds = new Set<string>();
+    const re = /^:::component\[([a-zA-Z0-9_-]+)\]$/gm;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(markdown)) !== null) {
+      usedSnapIds.add(m[1]);
+    }
+    for (const snapId of usedSnapIds) {
+      const snap = snapshots[snapId];
+      if (!snap) continue;
+      for (const mid of collectLibraryMediaIds(snap.rootNode)) {
+        mediaIds.add(mid);
+      }
+    }
+  }
+  return Array.from(mediaIds);
+}
+
+export function renderWechatHtml(
+  markdown: string,
+  rawStyle: TemplateStyleConfig,
+  options?: RenderWechatMarkdownOptions,
+) {
   const style = sanitizeStyle(rawStyle);
-  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
+  const normalizedMd = markdown.replace(/\r\n?/g, "\n");
+  const lines = normalizedMd.split("\n");
+  const lineOffsets: number[] = [];
+  let runningOffset = 0;
+  for (const l of lines) {
+    lineOffsets.push(runningOffset);
+    runningOffset += l.length + 1;
+  }
+
+  const rewriteDirectMediaUrl = (rawSrc: string): string => {
+    const m = /^\/api\/library\/media\/([0-9a-fA-F-]{36})$/.exec(rawSrc.trim());
+    if (m) {
+      const pub = options?.libraryMediaUrls?.[m[1]];
+      if (pub) return pub;
+      if (options?.forExport) return "";
+    }
+    return rawSrc;
+  };
+
+  const attachMdRange = (html: string, startPos: number, endPos: number) => {
+    if (options?.forExport || !html) return html;
+    return html.replace(/^<([a-z0-9]+)/i, `<$1 data-md-range="${startPos}-${endPos}"`);
+  };
+
   const blocks: string[] = [];
   const h2Counter = { count: 0 };
   let listType: "ul" | "ol" | null = null;
   let listItems: string[] = [];
+  let listStartOffset = 0;
+  let listEndOffset = 0;
   let inCode = false;
   let codeLang = "";
   let codeLines: string[] = [];
+  let codeStartOffset = 0;
   let inPresetId: string | null = null;
   let presetLines: string[] = [];
+  let presetStartOffset = 0;
+  let inComponentSnapId: string | null = null;
+  let componentLines: string[] = [];
+  let compStartOffset = 0;
   let tableRows: string[][] = [];
+  let tableStartOffset = 0;
+  let tableEndOffset = 0;
+
+  const resolveMarkdownTreeImg = (ref: ComponentImageRef): string => {
+    if (ref.kind === "library-media") {
+      const explicit = options?.libraryMediaUrls?.[ref.mediaId];
+      if (explicit) return safeUrl(explicit);
+      if (options?.forExport) return "";
+      return `/api/library/media/${encodeURIComponent(ref.mediaId)}`;
+    }
+    if (ref.kind === "inline-data") {
+      return escapeHtml(ref.dataUrl);
+    }
+    if (ref.kind === "inline-svg") {
+      return escapeHtml(ref.svgDataUrl);
+    }
+    return "";
+  };
 
   const flushList = () => {
     if (!listType || listItems.length === 0) return;
     blocks.push(
-      renderListItemsHtml(
-        listType,
-        listItems.map((item) => formatInlineMarkdown(item, style)),
-        style,
+      attachMdRange(
+        renderListItemsHtml(
+          listType,
+          listItems.map((item) => formatInlineMarkdown(item, style)),
+          style,
+        ),
+        listStartOffset,
+        listEndOffset,
       ),
     );
     listType = null;
@@ -281,11 +380,58 @@ export function renderWechatHtml(markdown: string, rawStyle: TemplateStyleConfig
 
   const flushTable = () => {
     if (tableRows.length === 0) return;
-    blocks.push(renderTable(tableRows, style));
+    blocks.push(attachMdRange(renderTable(tableRows, style), tableStartOffset, tableEndOffset));
     tableRows = [];
   };
 
-  const flushPreset = () => {
+  const flushComponent = (endOffset: number) => {
+    if (!inComponentSnapId) return;
+    const snapId = inComponentSnapId;
+    const rawBody = componentLines.join("\n").trim();
+    inComponentSnapId = null;
+    componentLines = [];
+
+    const snap = options?.snapshots?.[snapId];
+    const imgMatch = /!\[([^\]]*)\]\(([^)]+)\)/.exec(rawBody);
+    const cleanedTextBody = rawBody
+      .replace(/^#{1,3}\s+/gm, "")
+      .replace(/^>\s*/gm, "")
+      .trim();
+    const innerHtml = cleanedTextBody && !imgMatch
+      ? cleanedTextBody
+          .split("\n")
+          .map((line) => formatInlineMarkdown(line, style))
+          .join("<br />")
+      : undefined;
+
+    if (snap) {
+      const resolvedSlotImg = imgMatch ? rewriteDirectMediaUrl(imgMatch[2]) : undefined;
+      const html = renderComponentTreeHtml(
+        snap.rootNode,
+        style,
+        escapeHtml,
+        resolveMarkdownTreeImg,
+        {
+          contentHtml: innerHtml || undefined,
+          imageSrc: resolvedSlotImg ? safeUrl(resolvedSlotImg) : undefined,
+          imageAlt: imgMatch ? imgMatch[1] : undefined,
+          imageCaption: imgMatch ? imgMatch[1] : undefined,
+          forExport: options?.forExport,
+        },
+      );
+      const tagged = options?.forExport
+        ? html
+        : html.replace(
+            /^<section\b/,
+            () => `<section data-component-snapshot="${escapeHtml(snapId)}"`,
+          );
+      blocks.push(attachMdRange(tagged, compStartOffset, endOffset));
+    } else if (innerHtml) {
+      blocks.push(attachMdRange(renderParagraphHtml(innerHtml, style), compStartOffset, endOffset));
+    }
+  };
+
+  const flushPreset = (endOffset: number) => {
     if (!inPresetId) return;
     const pid = inPresetId;
     const rawBody = presetLines.join("\n").trim();
@@ -307,7 +453,7 @@ export function renderWechatHtml(markdown: string, rawStyle: TemplateStyleConfig
       {
         innerHtml,
         rawText: rawBody,
-        imageSrc: imgMatch ? imgMatch[2] : undefined,
+        imageSrc: imgMatch ? rewriteDirectMediaUrl(imgMatch[2]) : undefined,
         imageAlt: imgMatch ? imgMatch[1] : undefined,
         imageCaption: imgMatch ? imgMatch[1] : undefined,
         badgeIndex: h2Counter.count || 1,
@@ -317,21 +463,43 @@ export function renderWechatHtml(markdown: string, rawStyle: TemplateStyleConfig
       safeUrl,
     );
     if (rendered) {
-      blocks.push(rendered);
+      blocks.push(attachMdRange(rendered, presetStartOffset, endOffset));
     } else if (innerHtml) {
-      blocks.push(renderParagraphHtml(innerHtml, style));
+      blocks.push(attachMdRange(renderParagraphHtml(innerHtml, style), presetStartOffset, endOffset));
     }
   };
 
-  for (const rawLine of lines) {
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx += 1) {
+    const rawLine = lines[lineIdx];
+    const lineStart = lineOffsets[lineIdx];
+    const lineEnd = lineStart + rawLine.length;
     const trimmed = rawLine.trim();
+
+    if (inComponentSnapId) {
+      if (trimmed === ":::") {
+        flushComponent(lineEnd);
+      } else {
+        componentLines.push(rawLine);
+      }
+      continue;
+    }
 
     if (inPresetId) {
       if (trimmed === ":::") {
-        flushPreset();
+        flushPreset(lineEnd);
       } else {
         presetLines.push(rawLine);
       }
+      continue;
+    }
+
+    const compOpen = !inCode ? /^:::component\[([a-zA-Z0-9_-]+)\]$/i.exec(trimmed) : null;
+    if (compOpen) {
+      flushList();
+      flushTable();
+      inComponentSnapId = compOpen[1];
+      compStartOffset = lineStart;
+      componentLines = [];
       continue;
     }
 
@@ -340,6 +508,7 @@ export function renderWechatHtml(markdown: string, rawStyle: TemplateStyleConfig
       flushList();
       flushTable();
       inPresetId = presetOpen[1].toLowerCase();
+      presetStartOffset = lineStart;
       presetLines = [];
       continue;
     }
@@ -350,9 +519,10 @@ export function renderWechatHtml(markdown: string, rawStyle: TemplateStyleConfig
       if (!inCode) {
         inCode = true;
         codeLang = trimmed.slice(3).trim();
+        codeStartOffset = lineStart;
         codeLines = [];
       } else {
-        blocks.push(renderCodeBlock(codeLines.join("\n"), codeLang, style));
+        blocks.push(attachMdRange(renderCodeBlock(codeLines.join("\n"), codeLang, style), codeStartOffset, lineEnd));
         inCode = false;
         codeLang = "";
         codeLines = [];
@@ -369,6 +539,8 @@ export function renderWechatHtml(markdown: string, rawStyle: TemplateStyleConfig
       flushList();
       const cells = trimmed.slice(1, -1).split("|").map((c) => c.trim());
       if (cells.every((c) => /^:?-{2,}:?$/.test(c))) continue;
+      if (tableRows.length === 0) tableStartOffset = lineStart;
+      tableEndOffset = lineEnd;
       tableRows.push(cells);
       continue;
     }
@@ -381,14 +553,17 @@ export function renderWechatHtml(markdown: string, rawStyle: TemplateStyleConfig
 
     if (/^---+$/.test(trimmed)) {
       flushList();
-      blocks.push(renderDividerHtml(style));
+      blocks.push(attachMdRange(renderDividerHtml(style), lineStart, lineEnd));
       continue;
     }
 
     const standaloneImg = /^!\[([^\]]*)\]\(([^)]+)\)$/.exec(trimmed);
     if (standaloneImg) {
       flushList();
-      blocks.push(renderImageHtml(escapeHtml(standaloneImg[1]), standaloneImg[2], style));
+      const resolvedSrc = rewriteDirectMediaUrl(standaloneImg[2]);
+      if (resolvedSrc) {
+        blocks.push(attachMdRange(renderImageHtml(escapeHtml(standaloneImg[1]), resolvedSrc, style), lineStart, lineEnd));
+      }
       continue;
     }
 
@@ -396,14 +571,20 @@ export function renderWechatHtml(markdown: string, rawStyle: TemplateStyleConfig
     if (headingMatch) {
       flushList();
       const level = headingMatch[1].length as 1 | 2 | 3;
-      blocks.push(renderHeadingHtml(level, formatInlineMarkdown(headingMatch[2], style), style, h2Counter));
+      blocks.push(
+        attachMdRange(
+          renderHeadingHtml(level, formatInlineMarkdown(headingMatch[2], style), style, h2Counter),
+          lineStart,
+          lineEnd,
+        ),
+      );
       continue;
     }
 
     const quoteMatch = /^>\s*(.+)$/.exec(trimmed);
     if (quoteMatch) {
       flushList();
-      blocks.push(renderBlockquoteHtml(formatInlineMarkdown(quoteMatch[1], style), style));
+      blocks.push(attachMdRange(renderBlockquoteHtml(formatInlineMarkdown(quoteMatch[1], style), style), lineStart, lineEnd));
       continue;
     }
 
@@ -412,7 +593,9 @@ export function renderWechatHtml(markdown: string, rawStyle: TemplateStyleConfig
       if (listType !== "ul") {
         flushList();
         listType = "ul";
+        listStartOffset = lineStart;
       }
+      listEndOffset = lineEnd;
       listItems.push(ulMatch[1]);
       continue;
     }
@@ -422,19 +605,22 @@ export function renderWechatHtml(markdown: string, rawStyle: TemplateStyleConfig
       if (listType !== "ol") {
         flushList();
         listType = "ol";
+        listStartOffset = lineStart;
       }
+      listEndOffset = lineEnd;
       listItems.push(olMatch[1]);
       continue;
     }
 
     flushList();
-    blocks.push(renderParagraphHtml(formatInlineMarkdown(trimmed, style), style));
+    blocks.push(attachMdRange(renderParagraphHtml(formatInlineMarkdown(trimmed, style), style), lineStart, lineEnd));
   }
   flushList();
   flushTable();
-  flushPreset();
+  flushPreset(normalizedMd.length);
+  flushComponent(normalizedMd.length);
   if (inCode && codeLines.length > 0) {
-    blocks.push(renderCodeBlock(codeLines.join("\n"), codeLang, style));
+    blocks.push(attachMdRange(renderCodeBlock(codeLines.join("\n"), codeLang, style), codeStartOffset, normalizedMd.length));
   }
 
   return `<section style="background:${style.colors.bgColor};color:${style.colors.textColor};padding:24px 18px;font-family:${DEFAULT_WECHAT_FONT};">${blocks.join("")}</section>`;
@@ -531,7 +717,49 @@ export function renderStructuredArticleHtml(
   const attachBlockId = (html: string, blockId: string) =>
     html.replace(/^<([a-z0-9]+)/i, `<$1 data-block-id="${escapeHtml(blockId)}"`);
 
+  const resolveDraftTreeImg = (ref: ComponentImageRef): string => {
+    if (ref.kind === "project-asset") {
+      const explicit = imageUrls[ref.assetId] ?? "";
+      const url =
+        explicit
+        || (!options?.forExport && draft.projectId
+          ? `/api/typography/preview-image/${encodeURIComponent(draft.projectId)}/${encodeURIComponent(ref.assetId)}`
+          : "");
+      return url ? safeUrl(url) : "";
+    }
+    if (ref.kind === "library-media") {
+      const explicit = imageUrls[ref.mediaId] ?? "";
+      if (explicit) return safeUrl(explicit);
+      if (options?.forExport) return "";
+      return `/api/library/media/${encodeURIComponent(ref.mediaId)}`;
+    }
+    if (ref.kind === "inline-data") {
+      return escapeHtml(ref.dataUrl);
+    }
+    if (ref.kind === "inline-svg") {
+      return escapeHtml(ref.svgDataUrl);
+    }
+    return "";
+  };
+
   for (const block of draft.blocks) {
+    if (block.type === "custom-component") {
+      const slotHtml =
+        block.runs && runsToPlainText(block.runs).trim()
+          ? renderRunsHtml(block.runs, effectiveStyle, doc, false)
+          : undefined;
+      const compHtml = renderComponentTreeHtml(
+        block.snapshot.rootNode,
+        effectiveStyle,
+        escapeHtml,
+        resolveDraftTreeImg,
+        { contentHtml: slotHtml, forExport: options?.forExport },
+      );
+      if (compHtml) {
+        htmlBlocks.push(attachBlockId(compHtml, block.id));
+      }
+      continue;
+    }
     if (block.type === "preset") {
       const inner = renderRunsHtml(block.runs, effectiveStyle, doc, false);
       const rawText = runsToPlainText(block.runs);
@@ -551,6 +779,17 @@ export function renderStructuredArticleHtml(
     } else if (block.type === "heading") {
       const inner = renderRunsHtml(block.runs, effectiveStyle, doc, true);
       if (inner.trim()) {
+        if (block.customComponent) {
+          const compHtml = renderComponentTreeHtml(
+            block.customComponent.rootNode,
+            effectiveStyle,
+            escapeHtml,
+            resolveDraftTreeImg,
+            { contentHtml: inner, forExport: options?.forExport },
+          );
+          htmlBlocks.push(attachBlockId(compHtml, block.id));
+          continue;
+        }
         if (block.presetId) {
           if (block.presetId === "heading-dual-badge") h2Counter.count += 1;
           const presetHtml = renderXiumiPresetHtml(
@@ -570,6 +809,17 @@ export function renderStructuredArticleHtml(
     } else if (block.type === "paragraph") {
       const inner = renderRunsHtml(block.runs, effectiveStyle, doc, false);
       if (inner.trim()) {
+        if (block.customComponent) {
+          const compHtml = renderComponentTreeHtml(
+            block.customComponent.rootNode,
+            effectiveStyle,
+            escapeHtml,
+            resolveDraftTreeImg,
+            { contentHtml: inner, forExport: options?.forExport },
+          );
+          htmlBlocks.push(attachBlockId(compHtml, block.id));
+          continue;
+        }
         if (block.presetId) {
           if (block.presetId === "heading-dual-badge") h2Counter.count += 1;
           const presetHtml = renderXiumiPresetHtml(
@@ -589,6 +839,17 @@ export function renderStructuredArticleHtml(
     } else if (block.type === "blockquote") {
       const inner = renderRunsHtml(block.runs, effectiveStyle, doc, false);
       if (inner.trim()) {
+        if (block.customComponent) {
+          const compHtml = renderComponentTreeHtml(
+            block.customComponent.rootNode,
+            effectiveStyle,
+            escapeHtml,
+            resolveDraftTreeImg,
+            { contentHtml: inner, forExport: options?.forExport },
+          );
+          htmlBlocks.push(attachBlockId(compHtml, block.id));
+          continue;
+        }
         if (block.presetId) {
           const presetHtml = renderXiumiPresetHtml(
             block.presetId,
@@ -619,6 +880,22 @@ export function renderStructuredArticleHtml(
           ? `/api/typography/preview-image/${encodeURIComponent(draft.projectId)}/${encodeURIComponent(block.assetId)}`
           : "");
       if (src) {
+        if (block.customComponent) {
+          const compHtml = renderComponentTreeHtml(
+            block.customComponent.rootNode,
+            effectiveStyle,
+            escapeHtml,
+            resolveDraftTreeImg,
+            {
+              imageSrc: safeUrl(src),
+              imageAlt: block.alt || "文章配图",
+              imageCaption: block.caption,
+              forExport: options?.forExport,
+            },
+          );
+          htmlBlocks.push(attachBlockId(compHtml, block.id));
+          continue;
+        }
         if (block.presetId) {
           const presetHtml = renderXiumiPresetHtml(
             block.presetId,
@@ -651,7 +928,18 @@ export function renderStructuredArticleHtml(
         );
       }
     } else if (block.type === "divider") {
-      htmlBlocks.push(attachBlockId(renderDividerHtml(effectiveStyle), block.id));
+      if (block.customComponent) {
+        const compHtml = renderComponentTreeHtml(
+          block.customComponent.rootNode,
+          effectiveStyle,
+          escapeHtml,
+          resolveDraftTreeImg,
+          { forExport: options?.forExport },
+        );
+        htmlBlocks.push(attachBlockId(compHtml, block.id));
+      } else {
+        htmlBlocks.push(attachBlockId(renderDividerHtml(effectiveStyle), block.id));
+      }
     }
   }
 
@@ -662,6 +950,7 @@ export function countArticleStats(markdown: string) {
   const plain = markdown
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/^:::preset\[[a-z0-9-]+\]$/gim, " ")
+    .replace(/^:::component\[[a-zA-Z0-9_-]+\]$/gim, " ")
     .replace(/^:::$/gm, " ")
     .replace(/!\[[^\]]*\]\([^)]+\)/g, " ")
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")

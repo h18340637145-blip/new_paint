@@ -11,8 +11,11 @@ const defaultUrl = process.env.VERCEL_URL
 
 export const metadata: Metadata = {
   metadataBase: new URL(defaultUrl),
-  title: "创作工作台",
-  description: "通过提示词和参考图在画布中生成图片。",
+  title: {
+    default: "创作工作台 · 画布生图与公众号排版",
+    template: "%s · 创作工作台",
+  },
+  description: "在自由画布上生成配图、与 AI 共创图文分镜，一键套用模板与秀米素材排成微信公众号成稿。",
 };
 
 export default function RootLayout({
@@ -21,12 +24,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-CN" data-type="software" suppressHydrationWarning>
+    <html lang="zh-CN" data-type="software" className="light" style={{ colorScheme: "light" }} suppressHydrationWarning>
       <body className={`${GeistSans.className} antialiased`}>
         <ThemeProvider
           attribute="class"
-          defaultTheme="system"
-          enableSystem
+          defaultTheme="light"
+          forcedTheme="light"
+          enableSystem={false}
           disableTransitionOnChange
         >
           {children}

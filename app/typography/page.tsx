@@ -1,4 +1,9 @@
+import type { Metadata } from "next";
 import { TypographyWorkbench } from "@/components/typography/workbench";
+
+export const metadata: Metadata = {
+  title: "公众号排版与模板库",
+};
 
 export default async function TypographyPage({
   searchParams,

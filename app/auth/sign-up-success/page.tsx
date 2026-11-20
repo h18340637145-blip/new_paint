@@ -1,37 +1,13 @@
-import Link from "next/link";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { AuthStatusCard } from "@/components/auth-status-card";
 
 export default function Page() {
   return (
-    <div className="flex w-full items-center justify-center">
-      <div className="w-full max-w-sm">
-        <div className="flex flex-col gap-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-2xl">
-                请查看邮箱
-              </CardTitle>
-              <CardDescription>
-                首次注册时，请打开邮箱中的验证链接。已经验证过的账号可以直接登录。
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-wrap gap-4">
-              <Link href="/auth/login" className="text-sm underline underline-offset-4">
-                返回登录
-              </Link>
-              <Link href="/auth/forgot-password" className="text-sm underline underline-offset-4">
-                重置密码
-              </Link>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    </div>
+    <AuthStatusCard
+      tone="info"
+      title="请查收邮箱完成验证"
+      description="首次注册时，请打开发送到您邮箱的确认链接激活账号。已经完成邮箱验证的账号可直接登录。"
+      primaryAction={{ label: "返回登录", href: "/auth/login" }}
+      secondaryAction={{ label: "重置密码", href: "/auth/forgot-password" }}
+    />
   );
 }

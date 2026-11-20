@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Background,
@@ -18,8 +19,9 @@ import {
   type NodeChange,
   type XYPosition,
 } from "@xyflow/react";
-import { ArrowLeft, ArrowRight, BookmarkCheck, FilePlus2, LoaderCircle, RotateCcw } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookmarkCheck, Check, FilePlus2, Image as ImageIcon, LoaderCircle, Pencil, RotateCcw, Sparkles } from "lucide-react";
 import { Composer, type ComposerInput, type StudioMode } from "./composer";
+import { PENDING_AGENT_KICKOFF_KEY } from "./home";
 import { AgentMessage } from "./agent-message";
 import { ArticleTextNode, type ArticleTextNodeData } from "./article-text-node";
 import { ArticleStagingDialog } from "./article-staging-dialog";
@@ -32,7 +34,12 @@ import {
   type ArticleTextRole,
 } from "@/lib/studio/article-graph";
 import { sendAgentMessage } from "@/lib/studio/agent-client";
-import type { StudioAgentTurn, StudioAttachment, StudioPlacedNode } from "@/lib/studio/agent-events";
+import type {
+  CreativePlanProposal,
+  StudioAgentTurn,
+  StudioAttachment,
+  StudioPlacedNode,
+} from "@/lib/studio/agent-events";
 import { studioRequest, submitGeneration, uploadReference } from "@/lib/studio/client";
 import { configLabel, imageTypes, maxReferenceSize, models } from "@/lib/studio/models";
 import type { CanvasJob, CanvasSubmission, ImageAsset } from "@/lib/studio/types";
@@ -104,8 +111,12 @@ function ImageNode({ data, selected }: { data: ImageNodeData; selected?: boolean
   if (asset) {
     return (
       <div
-        className={`relative rounded-lg ${
-          data.highlightedError ? "ring-2 ring-red-500 ring-offset-2" : ""
+        className={`relative rounded-lg transition-shadow ${
+          data.highlightedError
+            ? "ring-2 ring-red-600 ring-offset-2"
+            : selected
+              ? "ring-2 ring-[#164b3e] ring-offset-2 shadow-lg"
+              : "shadow-sm"
         }`}
       >
         <NodeResizer
@@ -150,11 +161,34 @@ function ImageNode({ data, selected }: { data: ImageNodeData; selected?: boolean
   if ("placed" in data) return null;
   const job = data.job;
   return (
-    <div className="relative grid size-full place-items-center overflow-hidden rounded-lg border border-neutral-200 bg-neutral-200">
-      <div className={`grid size-full place-items-center ${processing(job) ? "animate-pulse bg-gradient-to-r from-neutral-100 to-neutral-300" : ""}`}>
-        <span className="rounded-full bg-neutral-700/90 px-3 py-1 text-xs text-white">
-          {processing(job) ? "Generating" : job.status === "unknown" ? "待核对" : job.status === "succeeded" ? "图片暂不可用" : "生成失败"}
+    <div className="relative size-full rounded-lg">
+      {data.articleConnectable && (
+        <>
+          <Handle
+            type="target"
+            position={Position.Left}
+            aria-label="连入图片节点"
+            className="!size-3.5 !border-2 !border-white !bg-neutral-900"
+          />
+          <Handle
+            type="source"
+            position={Position.Right}
+            aria-label="连出图片节点"
+            className="!size-3.5 !border-2 !border-white !bg-neutral-900"
+          />
+        </>
+      )}
+      {data.articleBadge && (
+        <span className="absolute -left-2.5 -top-2.5 z-10 inline-flex min-w-6 items-center justify-center rounded-full bg-neutral-950 px-2 py-0.5 text-[11px] font-bold text-white shadow">
+          {data.articleBadge}
         </span>
+      )}
+      <div className="grid size-full place-items-center overflow-hidden rounded-lg border border-neutral-200 bg-neutral-200">
+        <div className={`grid size-full place-items-center ${processing(job) ? "animate-pulse bg-gradient-to-r from-neutral-100 to-neutral-300" : ""}`}>
+          <span className="rounded-full bg-neutral-700/90 px-3 py-1 text-xs text-white">
+            {processing(job) ? "生成中…" : job.status === "unknown" ? "待核对" : job.status === "succeeded" ? "图片暂不可用" : "生成失败"}
+          </span>
+        </div>
       </div>
     </div>
   );
@@ -194,6 +228,14 @@ export function CanvasWorkspace({
   initialArticleEdges?: ArticleEdgeRecord[];
   initialSnapshots?: ArticleSnapshotRecord[];
 }) {
+  const router = useRouter();
+  const [projectTitle, setProjectTitle] = useState(project.title);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(project.title);
+  const [composerPreset, setComposerPreset] = useState<string | null>(null);
+  const [autoStagingGo, setAutoStagingGo] = useState(false);
+  const kickoffConsumedRef = useRef(false);
+
   const [submissions, setSubmissions] = useState(initial);
   const [agentTurns, setAgentTurns] = useState(initialAgentTurns);
   const [placedNodes, setPlacedNodes] = useState(initialPlacedNodes);
@@ -209,7 +251,9 @@ export function CanvasWorkspace({
   const [pastingImage, setPastingImage] = useState(false);
 
   const [attachments, setAttachments] = useState<StudioAttachment[]>([]);
-  const [mode, setMode] = useState<StudioMode>("image");
+  const [mode, setMode] = useState<StudioMode>(
+    initialAgentTurns.length > 0 || (initial.length === 0 && initialPlacedNodes.length === 0) ? "agent" : "image",
+  );
   const [width, setWidth] = useState(420);
   const [selecting, setSelecting] = useState(false);
   const [asset, setAsset] = useState<ImageAsset | null>(null);
@@ -243,13 +287,20 @@ export function CanvasWorkspace({
 
   const sync = useCallback(async () => {
     if (!syncing.current) {
-      syncing.current = studioRequest<{ submissions: CanvasSubmission[]; placedNodes: StudioPlacedNode[] }>({
+      syncing.current = studioRequest<{
+        submissions: CanvasSubmission[];
+        placedNodes: StudioPlacedNode[];
+        textNodes?: ArticleTextNodeRecord[];
+        articleEdges?: ArticleEdgeRecord[];
+      }>({
         action: "sync",
         projectId: project.id,
       })
-        .then(({ submissions, placedNodes }) => {
+        .then(({ submissions, placedNodes, textNodes: syncedTexts, articleEdges: syncedEdges }) => {
           setSubmissions(submissions);
           setPlacedNodes(placedNodes);
+          if (syncedTexts) setTextNodes(syncedTexts);
+          if (syncedEdges) setArticleEdges(syncedEdges);
           setError("");
         })
         .catch((error: Error) => {
@@ -300,15 +351,25 @@ export function CanvasWorkspace({
     }
     for (const entry of submissions) {
       for (const job of entry.jobs) {
-        if (job.canvasHidden || job.status !== "succeeded" || !job.asset) continue;
-        list.push({
-          nodeId: job.id,
-          kind: "image",
-          assetId: job.asset.id,
-          assetKind: "generated",
-          imageUrl: job.asset.url,
-          filename: "生成图片",
-        });
+        if (job.canvasHidden) continue;
+        if (job.status === "succeeded" && job.asset) {
+          list.push({
+            nodeId: job.id,
+            kind: "image",
+            assetId: job.asset.id,
+            assetKind: "generated",
+            imageUrl: job.asset.url,
+            filename: "生成图片",
+          });
+        } else if (processing(job)) {
+          list.push({
+            nodeId: job.id,
+            kind: "image",
+            assetKind: "generated",
+            filename: "配图生成中…",
+            pending: true,
+          });
+        }
       }
     }
     for (const placed of placedNodes) {
@@ -473,7 +534,7 @@ export function CanvasWorkspace({
             data: {
               job,
               saveSize: (size) => saveNodePosition(job.id, false, size),
-              articleConnectable: isArticleMode && !!job.asset,
+              articleConnectable: isArticleMode && (!!job.asset || processing(job)),
               articleBadge: isArticleMode ? graphAnalysis.badges[job.id] : undefined,
               highlightedError: isArticleMode && problemSet.has(job.id),
             },
@@ -547,12 +608,12 @@ export function CanvasWorkspace({
         selected,
         animated: false,
         style: {
-          stroke: selected ? "#dc2626" : "#171717",
-          strokeWidth: selected ? 2.5 : 2,
+          stroke: selected ? "#c2410c" : "#164b3e",
+          strokeWidth: selected ? 3.2 : 2.5,
         },
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          color: selected ? "#dc2626" : "#171717",
+          color: selected ? "#c2410c" : "#164b3e",
         },
       };
     });
@@ -695,63 +756,136 @@ export function CanvasWorkspace({
       .catch((failure: Error) => setError(failure.message));
   }
 
-  async function send(input: ComposerInput) {
-    if (mode === "agent") {
-      let id = crypto.randomUUID();
-      setAgentTurns((previous) => [
-        ...previous,
-        {
-          id,
-          prompt: input.prompt,
-          attachments: input.attachments ?? [],
-          skillName: input.skill?.name,
-          status: "running",
-          events: [],
-          createdAt: new Date().toISOString(),
-        },
-      ]);
-      try {
-        await sendAgentMessage(
-          project.id,
-          input.prompt,
-          (input.attachments ?? []).map((item) => item.id),
-          input.skill?.id ?? null,
-          (event) => {
-            const target = id;
-            if (event.type === "start") id = event.id;
-            setAgentTurns((previous) =>
-              previous.map((turn) => {
-                if (turn.id !== target) return turn;
-                if (event.type === "start")
-                  return {
-                    ...turn,
-                    id: event.id,
-                    prompt: event.prompt,
-                    attachments: event.attachments,
-                    createdAt: event.createdAt,
-                    skillName: event.skillName,
-                  };
-                if (event.type === "done") return { ...turn, status: turn.status === "failed" ? "failed" : "complete" };
+  const agentRunning = agentTurns.some((t) => t.status === "running");
+
+  const proposalStatus = useMemo(() => {
+    const executedIds = new Set<string>();
+    const proposalTurnIds: string[] = [];
+
+    for (let i = 0; i < agentTurns.length; i += 1) {
+      const turn = agentTurns[i];
+      const hasProposal = turn.events.some(
+        (ev) => ev.type === "tool-start" && ev.name === "propose_creative_plan",
+      );
+      if (hasProposal && turn.status === "complete") {
+        proposalTurnIds.push(turn.id);
+      }
+      const hasCompose = turn.events.some(
+        (ev) => ev.type === "tool-start" && ev.name === "compose_canvas_flow",
+      );
+      if (hasCompose) {
+        const composeCallIds = new Set(
+          turn.events
+            .filter((ev) => ev.type === "tool-start" && ev.name === "compose_canvas_flow")
+            .map((ev) => (ev.type === "tool-start" ? ev.id : "")),
+        );
+        const composeSucceeded = turn.events.some(
+          (ev) => ev.type === "tool-end" && !ev.failed && composeCallIds.has(ev.id),
+        );
+        if (composeSucceeded) {
+          for (const prevId of proposalTurnIds) {
+            executedIds.add(prevId);
+          }
+        }
+      }
+    }
+
+    const unexecuted = proposalTurnIds.filter((pid) => !executedIds.has(pid));
+    const latestPendingId = unexecuted[unexecuted.length - 1] ?? null;
+    return { executedIds, latestPendingId };
+  }, [agentTurns]);
+
+  async function runAgentTurn(
+    promptText: string,
+    turnAttachments: StudioAttachment[] = [],
+    skill?: { id: string; name: string } | null,
+  ) {
+    let id = crypto.randomUUID();
+    const graphMutatingNames = new Set([
+      "compose_canvas_flow",
+      "upsert_text_node",
+      "connect_canvas_nodes",
+    ]);
+    const graphCallIds = new Set<string>();
+
+    setAgentTurns((previous) => [
+      ...previous,
+      {
+        id,
+        prompt: promptText,
+        attachments: turnAttachments,
+        skillName: skill?.name,
+        status: "running",
+        events: [],
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    try {
+      await sendAgentMessage(
+        project.id,
+        promptText,
+        turnAttachments.map((item) => item.id),
+        skill?.id ?? null,
+        (event) => {
+          const target = id;
+          if (event.type === "start") id = event.id;
+          if (event.type === "tool-start" && graphMutatingNames.has(event.name)) {
+            graphCallIds.add(event.id);
+          }
+          setAgentTurns((previous) =>
+            previous.map((turn) => {
+              if (turn.id !== target) return turn;
+              if (event.type === "start")
                 return {
                   ...turn,
-                  status: event.type === "error" ? "failed" : turn.status,
-                  events: [...turn.events, event],
+                  id: event.id,
+                  prompt: event.prompt,
+                  attachments: event.attachments,
+                  createdAt: event.createdAt,
+                  skillName: event.skillName,
                 };
-              }),
-            );
-            if (event.type === "tool-end" && !event.failed) void sync();
-          },
-        );
-      } catch (failure) {
-        const text = failure instanceof Error ? failure.message : "Agent 请求失败。";
-        setAgentTurns((previous) =>
-          previous.map((turn) =>
-            turn.id === id ? { ...turn, status: "failed", events: [...turn.events, { type: "error", text }] } : turn,
-          ),
-        );
-      } finally {
-        await sync();
-      }
+              if (event.type === "done")
+                return { ...turn, status: turn.status === "failed" ? "failed" : "complete" };
+              return {
+                ...turn,
+                status: event.type === "error" ? "failed" : turn.status,
+                events: [...turn.events, event],
+              };
+            }),
+          );
+          if (event.type === "tool-end" && !event.failed) {
+            if (graphCallIds.has(event.id)) {
+              setCanvasView("article");
+            }
+            void sync();
+          }
+        },
+      );
+    } catch (failure) {
+      const text = failure instanceof Error ? failure.message : "Agent 请求失败。";
+      setAgentTurns((previous) =>
+        previous.map((turn) =>
+          turn.id === id
+            ? { ...turn, status: "failed", events: [...turn.events, { type: "error", text }] }
+            : turn,
+        ),
+      );
+    } finally {
+      await sync();
+    }
+  }
+
+  function handleConfirmProposal(proposal: CreativePlanProposal) {
+    if (agentRunning) return;
+    setMode("agent");
+    void runAgentTurn(
+      `我认同方案「${proposal.title}」，请按该分镜方案在画布中自动生成完整文案节点与配图（配图使用 ${proposal.recommendedModel}），并按顺序自动连线。`,
+    );
+  }
+
+  async function send(input: ComposerInput) {
+    if (mode === "agent") {
+      await runAgentTurn(input.prompt, input.attachments ?? [], input.skill);
       return;
     }
     const key = JSON.stringify([input.prompt, input.config, input.asset?.id]);
@@ -839,6 +973,79 @@ export function CanvasWorkspace({
     return snapshot;
   }
 
+  async function saveProjectRename() {
+    const trimmed = titleDraft.trim();
+    setEditingTitle(false);
+    if (!trimmed || trimmed === projectTitle) {
+      setTitleDraft(projectTitle);
+      return;
+    }
+    const prev = projectTitle;
+    setProjectTitle(trimmed);
+    try {
+      const res = await studioRequest<{ id: string; title: string }>({
+        action: "rename-project",
+        projectId: project.id,
+        title: trimmed,
+      });
+      setProjectTitle(res.title);
+      setTitleDraft(res.title);
+    } catch (err) {
+      setProjectTitle(prev);
+      setTitleDraft(prev);
+      setError(err instanceof Error ? err.message : "重命名项目失败。");
+    }
+  }
+
+  async function handleQuickGoTypography() {
+    if (autoStagingGo) return;
+    if (graphAnalysis.status === "ok" && !graphAnalysis.needsChainSelection && graphAnalysis.activeChain.length > 0) {
+      setAutoStagingGo(true);
+      setError("");
+      try {
+        const snap = await handleStageSnapshot(graphAnalysis.selectedChainHeadId);
+        router.push(`/typography?projectId=${project.id}&snapshotId=${snap.id}`);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "自动暂存失败，请点击「核对并暂存」检查连线。");
+      } finally {
+        setAutoStagingGo(false);
+      }
+      return;
+    }
+    if (isArticleMode && graphNodes.length > 0 && snapshots.length === 0) {
+      setStagingOpen(true);
+      return;
+    }
+    const latestSnap = snapshots[0]?.id;
+    router.push(
+      latestSnap
+        ? `/typography?projectId=${project.id}&snapshotId=${latestSnap}`
+        : `/typography?projectId=${project.id}`,
+    );
+  }
+
+  // 承接从创作首页带过来的首次 AI 共创提问
+  useEffect(() => {
+    if (kickoffConsumedRef.current) return;
+    try {
+      const raw = window.sessionStorage.getItem(PENDING_AGENT_KICKOFF_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        projectId?: string;
+        prompt?: string;
+        attachments?: StudioAttachment[];
+      };
+      if (parsed.projectId !== project.id || !parsed.prompt) return;
+      kickoffConsumedRef.current = true;
+      window.sessionStorage.removeItem(PENDING_AGENT_KICKOFF_KEY);
+      setMode("agent");
+      void runAgentTurn(parsed.prompt, Array.isArray(parsed.attachments) ? parsed.attachments : []);
+    } catch {
+      // 忽略缓存解析异常
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
+
   const entries = [
     ...submissions.map((entry) => ({ kind: "image" as const, entry })),
     ...agentTurns.map((entry) => ({ kind: "agent" as const, entry })),
@@ -895,84 +1102,150 @@ export function CanvasWorkspace({
             saveNodePosition(node.id, "placed" in node.data, node.position);
           }}
         >
-          <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="#aabacb" />
+          <Background variant={BackgroundVariant.Dots} gap={24} size={1.25} color="#8fa4b8" />
           <Controls showInteractive={false} />
         </ReactFlow>
 
-        <div className="canvas-project-label absolute left-3 top-3 z-10 flex flex-wrap items-center gap-2 rounded-xl border border-neutral-200 bg-white p-1.5 pr-2.5 shadow-sm">
-          <Link href="/projects" aria-label="返回项目列表" className="rounded-lg p-1.5 hover:bg-neutral-100">
-            <ArrowLeft size={15} />
+        <div className="canvas-project-label absolute left-3 top-3 z-10 flex flex-wrap items-center gap-2 rounded-xl border border-neutral-200/90 bg-white/95 p-1.5 pr-2.5 shadow-md backdrop-blur">
+          <Link
+            href="/projects"
+            title="返回项目库"
+            aria-label="返回项目列表"
+            className="inline-flex size-8 items-center justify-center rounded-lg text-neutral-600 hover:bg-neutral-100 hover:text-neutral-950"
+          >
+            <ArrowLeft size={16} />
           </Link>
-          <h1 className="max-w-44 truncate text-sm font-semibold">{project.title}</h1>
-          <div className="inline-flex rounded-lg bg-neutral-100 p-0.5 text-xs" role="group" aria-label="画布模式">
+
+          {editingTitle ? (
+            <div className="flex items-center gap-1">
+              <input
+                type="text"
+                aria-label="修改项目名称"
+                autoFocus
+                maxLength={80}
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onBlur={() => void saveProjectRename()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void saveProjectRename();
+                  } else if (e.key === "Escape") {
+                    setTitleDraft(projectTitle);
+                    setEditingTitle(false);
+                  }
+                }}
+                className="w-40 rounded-lg border border-[#164b3e] bg-white px-2 py-1 text-xs font-semibold text-neutral-950 focus:outline-none sm:w-52"
+              />
+              <button
+                type="button"
+                aria-label="保存项目名称"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => void saveProjectRename()}
+                className="inline-flex size-7 items-center justify-center rounded-md bg-[#164b3e] text-white"
+              >
+                <Check size={13} />
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              title="点击修改项目名称"
+              onClick={() => {
+                setTitleDraft(projectTitle);
+                setEditingTitle(true);
+              }}
+              className="group inline-flex max-w-48 items-center gap-1.5 rounded-lg px-2 py-1 text-left text-sm font-semibold text-neutral-950 hover:bg-neutral-100"
+            >
+              <span className="truncate">{projectTitle}</span>
+              <Pencil size={12} className="shrink-0 text-neutral-400 opacity-70 group-hover:text-neutral-700 group-hover:opacity-100" aria-hidden="true" />
+            </button>
+          )}
+
+          <div className="inline-flex rounded-lg border border-neutral-200 bg-neutral-100 p-0.5 text-xs" role="group" aria-label="画布模式">
             <button
               type="button"
               onClick={() => setCanvasView("studio")}
-              className={`rounded-md px-2.5 py-1 font-medium transition ${
-                canvasView === "studio" ? "bg-white text-neutral-950 shadow-sm" : "text-neutral-600 hover:text-neutral-950"
+              className={`min-h-8 rounded-md px-2.5 py-1 font-semibold transition ${
+                canvasView === "studio" ? "bg-white text-neutral-950 shadow-xs" : "text-neutral-600 hover:text-neutral-950"
               }`}
             >
-              画布创作
+              自由画布
             </button>
             <button
               type="button"
               onClick={() => setCanvasView("article")}
-              className={`rounded-md px-2.5 py-1 font-medium transition ${
-                canvasView === "article" ? "bg-neutral-950 text-white shadow-sm" : "text-neutral-600 hover:text-neutral-950"
+              className={`min-h-8 rounded-md px-2.5 py-1 font-semibold transition ${
+                canvasView === "article" ? "bg-[#164b3e] text-white shadow-xs" : "text-neutral-600 hover:text-neutral-950"
               }`}
             >
-              文章编排
+              文章连线
             </button>
           </div>
         </div>
 
-        {isArticleMode && (
-          <div className="absolute right-3 top-3 z-10 flex flex-wrap items-center gap-2 rounded-xl border border-neutral-200 bg-white/95 p-1.5 shadow-sm backdrop-blur">
-            <button
-              type="button"
-              onClick={() => void addArticleTextNode()}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-800 hover:bg-neutral-50"
-            >
-              <FilePlus2 size={13} />
-              添加文本
-            </button>
-
-            {selectedEdgeIds.length > 0 && (
+        <div className="absolute right-3 top-3 z-10 flex flex-wrap items-center gap-2 rounded-xl border border-neutral-200/90 bg-white/95 p-1.5 shadow-md backdrop-blur">
+          {isArticleMode && (
+            <>
               <button
                 type="button"
-                onClick={() => selectedEdgeIds.forEach(deleteEdgeById)}
-                className="inline-flex items-center gap-1 rounded-lg bg-red-50 px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"
+                onClick={() => void addArticleTextNode()}
+                className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-semibold text-neutral-800 hover:bg-neutral-50"
               >
-                删除选中连线
+                <FilePlus2 size={14} />
+                添加文本
               </button>
-            )}
 
-            <button
-              type="button"
-              onClick={() => setStagingOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-neutral-950 px-3 py-1.5 text-xs font-medium text-white hover:bg-neutral-800"
-            >
-              <BookmarkCheck size={13} />
-              核对并暂存
-              {snapshots.length > 0 && (
-                <span className="rounded-full bg-white/20 px-1.5 text-[10px]">v{snapshots[0].versionNumber}</span>
+              {selectedEdgeIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => selectedEdgeIds.forEach(deleteEdgeById)}
+                  className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-700 hover:bg-red-100"
+                >
+                  删除连线
+                </button>
               )}
-            </button>
 
-            <Link
-              href={`/typography?projectId=${project.id}`}
-              className="inline-flex items-center gap-1 rounded-lg border border-neutral-200 bg-neutral-50 px-2.5 py-1.5 text-xs font-medium text-neutral-800 hover:bg-neutral-100"
-            >
-              去排版
-              <ArrowRight size={12} />
-            </Link>
-          </div>
-        )}
+              <button
+                type="button"
+                onClick={() => setStagingOpen(true)}
+                className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-xs font-semibold text-neutral-800 hover:bg-neutral-50"
+              >
+                <BookmarkCheck size={14} />
+                核对暂存
+                {snapshots.length > 0 && (
+                  <span className="rounded-full bg-emerald-100 px-1.5 text-[10px] font-bold text-[#164b3e]">
+                    v{snapshots[0].versionNumber}
+                  </span>
+                )}
+              </button>
+            </>
+          )}
+
+          <button
+            type="button"
+            disabled={autoStagingGo}
+            onClick={() => void handleQuickGoTypography()}
+            className="inline-flex min-h-8 items-center gap-1 rounded-lg bg-[#164b3e] px-3 py-1 text-xs font-semibold text-white shadow-xs hover:bg-[#123d32] disabled:opacity-60"
+          >
+            <span>{autoStagingGo ? "正在同步…" : "去公众号排版"}</span>
+            <ArrowRight size={13} />
+          </button>
+        </div>
 
         {!nodes.length && (
-          <p className="pointer-events-none absolute inset-0 grid place-items-center text-sm text-neutral-500">
-            {isArticleMode ? "点击右上角「添加文本」或上传图片，用连线串联文章顺序" : "输入你的想法开始创作"}
-          </p>
+          <div className="pointer-events-none absolute inset-0 grid place-items-center p-6 text-center">
+            <div className="max-w-sm space-y-1.5 rounded-2xl border border-neutral-200/70 bg-white/80 px-5 py-4 shadow-xs backdrop-blur-xs">
+              <p className="text-sm font-semibold text-neutral-800">
+                {isArticleMode ? "从添加文案或配图开始串联文章" : "画布已就绪，随时放置灵感与配图"}
+              </p>
+              <p className="text-xs leading-relaxed text-neutral-500">
+                {isArticleMode
+                  ? "点击右上角「添加文本」，或在右侧让 AI 自动规划图文并连好顺序；也支持直接按 Ctrl+V / ⌘V 粘贴截图上画布。"
+                  : "可在右侧与 AI 聊选题自动铺画布、生成单张配图，或直接按 Ctrl+V / ⌘V 粘贴本地图片。"}
+              </p>
+            </div>
+          </div>
         )}
         {selecting && (
           <div className="absolute left-1/2 top-3 z-20 flex -translate-x-1/2 items-center gap-3 whitespace-nowrap rounded-full bg-neutral-950 px-4 py-2 text-xs text-white">
@@ -1001,7 +1274,7 @@ export function CanvasWorkspace({
         aria-valuemax={maxWidth}
         aria-valuenow={width}
         tabIndex={0}
-        className="z-10 hidden w-2 shrink-0 cursor-col-resize touch-none border-l border-neutral-200 bg-white hover:bg-neutral-200 focus-visible:bg-neutral-300 md:block"
+        className="z-10 hidden w-2.5 shrink-0 cursor-col-resize touch-none items-center justify-center border-x border-neutral-300 bg-neutral-200/80 transition hover:bg-neutral-300 focus-visible:bg-[#164b3e]/20 md:flex"
         onKeyDown={(event) => {
           if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
             event.preventDefault();
@@ -1013,24 +1286,82 @@ export function CanvasWorkspace({
           if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
           setPanelWidth(window.innerWidth - event.clientX);
         }}
-      />
+      >
+        <span aria-hidden="true" className="h-10 w-0.5 rounded-full bg-neutral-500" />
+      </div>
 
       <aside
         aria-label="生图对话面板"
         style={{ "--panel-width": `${width}px` } as React.CSSProperties}
-        className="flex h-[48dvh] min-h-0 w-full shrink-0 flex-col bg-white md:h-full md:w-[var(--panel-width)]"
+        className="flex h-[48dvh] min-h-0 w-full shrink-0 flex-col border-t border-neutral-300 bg-white shadow-sm md:h-full md:w-[var(--panel-width)] md:border-t-0"
       >
-        <header className="canvas-chat-header border-b px-4 py-3 text-sm font-semibold">
-          {entries.length ? "创作记录" : "新对话"}
+        <header className="canvas-chat-header flex items-center justify-between border-b px-4 py-3 text-sm font-semibold">
+          <span>{entries.length ? "创作对话与记录" : "创作助手"}</span>
+          <span className="text-xs font-normal text-neutral-500">
+            {mode === "agent" ? "AI 图文共创" : "单图生成"}
+          </span>
         </header>
         <div ref={history} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
           {entries.length === 0 ? (
-            <div className="grid h-full place-items-center text-sm font-medium">开始创作</div>
+            <div className="flex h-full flex-col justify-center gap-4 py-4">
+              <div className="space-y-1">
+                <p className="text-sm font-semibold text-neutral-900">三步完成一篇公众号好图文</p>
+                <p className="text-xs leading-relaxed text-neutral-500">
+                  不用纠结先写字还是先找图，直接把想法发在下方输入框即可。
+                </p>
+              </div>
+
+              <div className="space-y-2 text-xs">
+                <div className="rounded-xl border border-neutral-200/80 bg-neutral-50/80 p-3">
+                  <div className="font-semibold text-neutral-900">1. 聊选题、出图文分镜</div>
+                  <p className="mt-0.5 text-neutral-600">用「AI 图文共创」模式商量结构，满意后一键铺好文案节点与配图并连好顺序。</p>
+                </div>
+                <div className="rounded-xl border border-neutral-200/80 bg-neutral-50/80 p-3">
+                  <div className="font-semibold text-neutral-900">2. 补充单图或粘贴截图</div>
+                  <p className="mt-0.5 text-neutral-600">切到「单图生成」单独补图，或在画布任意位置按 Ctrl+V / ⌘V 粘贴参考图。</p>
+                </div>
+                <div className="rounded-xl border border-neutral-200/80 bg-neutral-50/80 p-3">
+                  <div className="font-semibold text-neutral-900">3. 一键送去公众号排版</div>
+                  <p className="mt-0.5 text-neutral-600">点击画布右上角「去公众号排版」，套用模板与秀米素材直接复制发布。</p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode("agent");
+                    setComposerPreset("帮我策划一篇周末城市漫步主题的公众号推文，包含导语、两段正文和 2 张纪实感配图。");
+                  }}
+                  className="inline-flex items-center gap-1 rounded-full border border-[#c8dbd0] bg-[#f2f7f4] px-3 py-1.5 text-xs font-medium text-[#164b3e] hover:bg-[#e6f0ea]"
+                >
+                  <Sparkles size={12} />
+                  示例：策划城市漫步图文
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode("image");
+                    setComposerPreset("温暖木质书桌上的手冲咖啡与翻开的笔记本，柔和晨光，胶片摄影质感，16:9");
+                  }}
+                  className="inline-flex items-center gap-1 rounded-full border border-neutral-200 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+                >
+                  <ImageIcon size={12} />
+                  示例：生成 16:9 封面配图
+                </button>
+              </div>
+            </div>
           ) : (
             <div className="space-y-5">
               {entries.map(({ kind, entry }) =>
                 kind === "agent" ? (
-                  <AgentMessage key={entry.id} turn={entry} />
+                  <AgentMessage
+                    key={entry.id}
+                    turn={entry}
+                    planExecuted={proposalStatus.executedIds.has(entry.id)}
+                    canConfirmPlan={!agentRunning && proposalStatus.latestPendingId === entry.id}
+                    onConfirmPlan={handleConfirmProposal}
+                  />
                 ) : (
                   <article key={entry.id} className="space-y-2 text-sm">
                     {/* eslint-disable-next-line @next/next/no-img-element -- 历史记录保留提交时的参考图。 */}
@@ -1101,7 +1432,9 @@ export function CanvasWorkspace({
             onSend={send}
             mode={mode}
             onModeChange={setMode}
-            generating={active || !!regenerating}
+            presetPrompt={composerPreset}
+            onPresetConsumed={() => setComposerPreset(null)}
+            generating={active || !!regenerating || agentRunning}
             selecting={selecting}
             canvasAsset={asset}
             onClearCanvas={() => setAsset(null)}

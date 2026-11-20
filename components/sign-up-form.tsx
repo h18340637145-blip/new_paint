@@ -31,7 +31,7 @@ export function SignUpForm({
     e.preventDefault();
     if (isLoading) return;
     if (password !== repeatPassword) {
-      setError("两次输入的密码不一致。");
+      setError("两次输入的密码不一致，请重新核对。");
       return;
     }
 
@@ -65,30 +65,37 @@ export function SignUpForm({
 
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
-      <Card>
+      <Card className="rounded-2xl border-neutral-200/80 bg-white text-neutral-950 shadow-sm">
         <CardHeader>
-          <CardTitle className="text-2xl">注册创作工作台</CardTitle>
-          <CardDescription>注册后请通过邮件验证邮箱。</CardDescription>
+          <CardTitle className="text-2xl tracking-tight text-neutral-950">注册创作工作台</CardTitle>
+          <CardDescription>注册并完成邮箱验证后，即可免费获取每月 3 张生图额度与个人排版素材库。</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSignUp}>
-            <div className="flex flex-col gap-6">
+            <div className="flex flex-col gap-5">
+              {error && (
+                <div
+                  role="alert"
+                  className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-sm font-medium text-red-800"
+                >
+                  {error}
+                </div>
+              )}
+
               <div className="grid gap-2">
                 <Label htmlFor="email">邮箱</Label>
                 <Input
                   id="email"
                   type="email"
                   autoComplete="email"
-                  placeholder="m@example.com"
+                  placeholder="name@example.com"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                 />
               </div>
               <div className="grid gap-2">
-                <div className="flex items-center">
-                  <Label htmlFor="password">密码</Label>
-                </div>
+                <Label htmlFor="password">设置密码</Label>
                 <Input
                   id="password"
                   type="password"
@@ -99,9 +106,7 @@ export function SignUpForm({
                 />
               </div>
               <div className="grid gap-2">
-                <div className="flex items-center">
-                  <Label htmlFor="repeat-password">确认密码</Label>
-                </div>
+                <Label htmlFor="repeat-password">再次确认密码</Label>
                 <Input
                   id="repeat-password"
                   type="password"
@@ -111,14 +116,16 @@ export function SignUpForm({
                   onChange={(e) => setRepeatPassword(e.target.value)}
                 />
               </div>
-              {error && <p role="alert" className="text-sm text-red-500">{error}</p>}
-              <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading ? "注册中…" : "注册"}
+              <Button type="submit" className="min-h-11 w-full bg-[#164b3e] hover:bg-[#123d32]" disabled={isLoading}>
+                {isLoading ? "注册中…" : "创建账号"}
               </Button>
             </div>
-            <div className="mt-4 text-center text-sm">
+            <div className="mt-4 text-center text-sm text-neutral-600">
               已有账号？{" "}
-              <Link href="/auth/login" className="underline underline-offset-4">
+              <Link
+                href="/auth/login"
+                className="inline-flex min-h-11 items-center font-medium text-neutral-950 underline underline-offset-4"
+              >
                 返回登录
               </Link>
             </div>

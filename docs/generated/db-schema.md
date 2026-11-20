@@ -30,6 +30,11 @@ node scripts/generate-db-schema-doc.mjs > docs/generated/db-schema.md
 | `studio_article_tasks` | 是 | [20261118223000_add_canvas_article_workflow.sql](../../supabase/migrations/20261118223000_add_canvas_article_workflow.sql) |
 | `studio_article_drafts` | 是 | [20261118223000_add_canvas_article_workflow.sql](../../supabase/migrations/20261118223000_add_canvas_article_workflow.sql) |
 | `studio_published_images` | 是 | [20261118223000_add_canvas_article_workflow.sql](../../supabase/migrations/20261118223000_add_canvas_article_workflow.sql) |
+| `typography_teams` | 是 | [20261119213000_add_typography_libraries_and_teams.sql](../../supabase/migrations/20261119213000_add_typography_libraries_and_teams.sql) |
+| `typography_team_members` | 是 | [20261119213000_add_typography_libraries_and_teams.sql](../../supabase/migrations/20261119213000_add_typography_libraries_and_teams.sql) |
+| `typography_team_invites` | 是 | [20261119213000_add_typography_libraries_and_teams.sql](../../supabase/migrations/20261119213000_add_typography_libraries_and_teams.sql) |
+| `typography_library_media` | 是 | [20261119213000_add_typography_libraries_and_teams.sql](../../supabase/migrations/20261119213000_add_typography_libraries_and_teams.sql) |
+| `typography_library_items` | 是 | [20261119213000_add_typography_libraries_and_teams.sql](../../supabase/migrations/20261119213000_add_typography_libraries_and_teams.sql) |
 
 ## 数据库函数
 
@@ -41,6 +46,7 @@ node scripts/generate-db-schema-doc.mjs > docs/generated/db-schema.md
 | `configure_zpay_edge` | [20261117154734_configure_zpay_edge.sql](../../supabase/migrations/20261117154734_configure_zpay_edge.sql) |
 | `read_zpay_edge_config` | [20261117154734_configure_zpay_edge.sql](../../supabase/migrations/20261117154734_configure_zpay_edge.sql) |
 | `prevent_article_snapshot_mutation` | [20261118223000_add_canvas_article_workflow.sql](../../supabase/migrations/20261118223000_add_canvas_article_workflow.sql) |
+| `is_typography_team_member` | [20261119213000_add_typography_libraries_and_teams.sql](../../supabase/migrations/20261119213000_add_typography_libraries_and_teams.sql) |
 
 ## 存储桶
 

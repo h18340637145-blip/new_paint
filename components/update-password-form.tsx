@@ -24,7 +24,7 @@ export function UpdatePasswordForm({
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
 
-  const handleForgotPassword = async (
+  const handleUpdatePassword = async (
     e: React.SubmitEvent<HTMLFormElement>,
   ) => {
     e.preventDefault();
@@ -35,10 +35,9 @@ export function UpdatePasswordForm({
     try {
       const { error } = await supabase.auth.updateUser({ password });
       if (error) throw error;
-      // Update this route to redirect to an authenticated route. The user already has an active session.
       router.push("/protected");
     } catch (error: unknown) {
-      setError(error instanceof Error ? error.message : "An error occurred");
+      setError(error instanceof Error ? error.message : "更新密码失败，请重新发起找回流程。");
     } finally {
       setIsLoading(false);
     }
@@ -46,30 +45,39 @@ export function UpdatePasswordForm({
 
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
-      <Card>
+      <Card className="rounded-2xl border-neutral-200/80 bg-white text-neutral-950 shadow-sm">
         <CardHeader>
-          <CardTitle className="text-2xl">Reset Your Password</CardTitle>
+          <CardTitle className="text-2xl tracking-tight text-neutral-950">设置新密码</CardTitle>
           <CardDescription>
-            Please enter your new password below.
+            请输入新的账号登录密码，保存后将直接进入创作工作台。
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleForgotPassword}>
-            <div className="flex flex-col gap-6">
+          <form onSubmit={handleUpdatePassword}>
+            <div className="flex flex-col gap-5">
+              {error && (
+                <div
+                  role="alert"
+                  className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-sm font-medium text-red-800"
+                >
+                  {error}
+                </div>
+              )}
+
               <div className="grid gap-2">
-                <Label htmlFor="password">New password</Label>
+                <Label htmlFor="password">新密码</Label>
                 <Input
                   id="password"
                   type="password"
-                  placeholder="New password"
+                  autoComplete="new-password"
+                  placeholder="请输入新密码"
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                 />
               </div>
-              {error && <p className="text-sm text-red-500">{error}</p>}
-              <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading ? "Saving..." : "Save new password"}
+              <Button type="submit" className="min-h-11 w-full bg-[#164b3e] hover:bg-[#123d32]" disabled={isLoading}>
+                {isLoading ? "正在保存…" : "保存新密码并进入工作台"}
               </Button>
             </div>
           </form>

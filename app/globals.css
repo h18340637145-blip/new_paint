@@ -4,6 +4,9 @@
 
 @layer base {
   :root {
+    color-scheme: light;
+    --ease-out-quart: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
     --background: 0 0% 100%;
     --foreground: 0 0% 3.9%;
     --card: 0 0% 100%;
@@ -66,6 +69,10 @@
     @apply bg-background text-foreground;
     overflow-wrap: break-word;
   }
+  :focus-visible {
+    outline: 2px solid var(--surface-accent, #164b3e);
+    outline-offset: 2px;
+  }
   h1, h2, h3 {
     text-wrap: balance;
   }
@@ -78,5 +85,93 @@
   dialog::backdrop {
     overflow: hidden;
     overscroll-behavior: contain;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  button:not(:disabled):not([role="tab"]):not(.no-press) {
+    transition:
+      transform 150ms var(--ease-out-quart),
+      background-color 150ms ease,
+      border-color 150ms ease,
+      color 150ms ease,
+      box-shadow 150ms ease;
+  }
+  button:not(:disabled):not([role="tab"]):not(.no-press):active {
+    transform: scale(0.98);
+  }
+}
+
+/* 温和纤细滚动条，契合纸张浅色质感 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(24, 39, 33, 0.18) transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(24, 39, 33, 0.18);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(24, 39, 33, 0.32);
+}
+
+@keyframes drawer-slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes drawer-slide-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes toast-float-up {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .animate-drawer-right {
+    animation: drawer-slide-in-right 220ms var(--ease-drawer) both;
+  }
+  .animate-drawer-left {
+    animation: drawer-slide-in-left 220ms var(--ease-drawer) both;
+  }
+  .animate-toast-up {
+    animation: toast-float-up 200ms var(--ease-out-quart) both;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

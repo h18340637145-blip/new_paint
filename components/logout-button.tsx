@@ -13,5 +13,9 @@ export function LogoutButton() {
     router.push("/auth/login");
   };
 
-  return <Button size="sm" variant="outline" onClick={logout}>退出登录</Button>;
+  return (
+    <Button size="sm" variant="outline" className="min-h-11 rounded-xl px-3.5 text-xs font-medium" onClick={logout}>
+      退出登录
+    </Button>
+  );
 }

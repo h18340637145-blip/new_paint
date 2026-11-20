@@ -32,6 +32,7 @@ export interface ArticleGraphNode {
   assetKind?: "reference" | "generated";
   imageUrl?: string;
   filename?: string;
+  pending?: boolean;
 }
 
 export interface SnapshotOrderedNode {
@@ -60,7 +61,8 @@ export type ArticleGraphStatus =
   | "empty"
   | "cycle"
   | "branch"
-  | "empty_in_chain";
+  | "empty_in_chain"
+  | "generating_in_chain";
 
 export interface ArticleGraphAnalysis {
   status: ArticleGraphStatus;
@@ -77,6 +79,9 @@ export interface ArticleGraphAnalysis {
 function isEmptyGraphNode(node: ArticleGraphNode): boolean {
   if (node.kind === "text") {
     return !node.text || node.text.trim().length === 0;
+  }
+  if (node.pending) {
+    return false;
   }
   return !node.assetId;
 }
@@ -318,6 +323,20 @@ export function analyzeArticleGraph(
     });
   } else if (isolatedContentNodes.length === 1) {
     badges[isolatedContentNodes[0].nodeId] = "#1";
+  }
+
+  if (activeChain.some((n) => n.pending)) {
+    return {
+      status: "generating_in_chain",
+      message: "主链中仍有配图正在生成中，请等待图片生成完成后再保存暂存版本。",
+      problemNodeIds: [],
+      chains: candidateChains,
+      needsChainSelection,
+      selectedChainHeadId,
+      activeChain,
+      excludedNodes,
+      badges,
+    };
   }
 
   return {

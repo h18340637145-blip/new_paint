@@ -26,7 +26,7 @@ export default async function HomePage() {
         <LandingBenefits />
         <LandingFeatures />
         <LandingPricing isAuthenticated={isAuthenticated} />
-        <LandingFaq />
+        <LandingFaq isAuthenticated={isAuthenticated} />
       </main>
       <LandingFooter isAuthenticated={isAuthenticated} />
     </div>

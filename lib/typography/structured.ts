@@ -1,4 +1,9 @@
-import type { TemplateStyleConfig } from "./types";
+import {
+  collectProjectAssetIdsFromTree,
+  extractPlainTextFromTree,
+  type AppliedComponentSnapshot,
+} from "./custom-tree";
+import type { AppliedLibraryTemplateMeta, TemplateStyleConfig } from "./types";
 
 export type FontFamilyChoice = "default" | "sans" | "serif" | "mono";
 
@@ -14,6 +19,7 @@ export interface DocumentTextStyle {
   color?: string | null;
   bold?: boolean | null;
   italic?: boolean | null;
+  appliedLibraryTemplate?: AppliedLibraryTemplateMeta | null;
 }
 
 export interface TextRunStyle {
@@ -41,6 +47,7 @@ export type StructuredArticleBlock =
       level: 1 | 2 | 3;
       runs: TextRun[];
       presetId?: string;
+      customComponent?: AppliedComponentSnapshot;
       sourceNodeId?: string;
       verbatim?: boolean;
     }
@@ -49,6 +56,7 @@ export type StructuredArticleBlock =
       type: "paragraph";
       runs: TextRun[];
       presetId?: string;
+      customComponent?: AppliedComponentSnapshot;
       sourceNodeId?: string;
       verbatim?: boolean;
     }
@@ -57,6 +65,7 @@ export type StructuredArticleBlock =
       type: "blockquote";
       runs: TextRun[];
       presetId?: string;
+      customComponent?: AppliedComponentSnapshot;
       sourceNodeId?: string;
       verbatim?: boolean;
     }
@@ -74,6 +83,7 @@ export type StructuredArticleBlock =
       alt: string;
       caption?: string;
       presetId?: string;
+      customComponent?: AppliedComponentSnapshot;
       sourceNodeId?: string;
     }
   | {
@@ -85,7 +95,15 @@ export type StructuredArticleBlock =
     }
   | {
       id: string;
+      type: "custom-component";
+      snapshot: AppliedComponentSnapshot;
+      runs?: TextRun[];
+      sourceNodeId?: string;
+    }
+  | {
+      id: string;
       type: "divider";
+      customComponent?: AppliedComponentSnapshot;
     };
 
 export interface StructuredArticleDraft {
@@ -295,10 +313,25 @@ export function syncPlainTextIntoRuns(runs: TextRun[], nextPlain: string): TextR
 export function extractDraftImageAssetIds(blocks: StructuredArticleBlock[]): string[] {
   const seen = new Set<string>();
   const ids: string[] = [];
+  const addId = (id: string | undefined) => {
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      ids.push(id);
+    }
+  };
   for (const block of blocks) {
-    if (block.type === "image" && block.assetId && !seen.has(block.assetId)) {
-      seen.add(block.assetId);
-      ids.push(block.assetId);
+    if (block.type === "image") {
+      addId(block.assetId);
+    }
+    if ("customComponent" in block && block.customComponent) {
+      for (const id of collectProjectAssetIdsFromTree(block.customComponent.rootNode)) {
+        addId(id);
+      }
+    }
+    if (block.type === "custom-component") {
+      for (const id of collectProjectAssetIdsFromTree(block.snapshot.rootNode)) {
+        addId(id);
+      }
     }
   }
   return ids;
@@ -315,6 +348,11 @@ export function structuredDraftToPlainText(draft: Pick<StructuredArticleDraft, "
       || block.type === "preset"
     ) {
       const txt = runsToPlainText(block.runs).trim();
+      if (txt) parts.push(txt);
+    } else if (block.type === "custom-component") {
+      const txt = block.runs
+        ? runsToPlainText(block.runs).trim()
+        : extractPlainTextFromTree(block.snapshot.rootNode).trim();
       if (txt) parts.push(txt);
     } else if (block.type === "list") {
       block.items.forEach((item, i) => {

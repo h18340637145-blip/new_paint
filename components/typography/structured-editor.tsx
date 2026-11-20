@@ -9,6 +9,7 @@ import {
   Eraser,
   Italic,
   Plus,
+  RefreshCw,
   Save,
   Trash2,
   Wand2,
@@ -72,8 +73,10 @@ export function StructuredDraftEditor({
   dirty,
   conflictError,
   selectedBlockId,
+  latestItemVersions = {},
   onSelectBlock,
   onChangeDraft,
+  onReapplyBlockSnapshot,
   onSaveNow,
   onReloadLatest,
 }: {
@@ -83,8 +86,10 @@ export function StructuredDraftEditor({
   dirty: boolean;
   conflictError: string;
   selectedBlockId: string | null;
+  latestItemVersions?: Record<string, number>;
   onSelectBlock: (blockId: string) => void;
   onChangeDraft: (updater: (prev: StructuredArticleDraft) => StructuredArticleDraft) => void;
+  onReapplyBlockSnapshot?: (blockId: string, sourceItemId: string) => void;
   onSaveNow: () => void;
   onReloadLatest: () => void;
 }) {
@@ -121,17 +126,23 @@ export function StructuredDraftEditor({
       ...prev,
       blocks: prev.blocks.map((block) => {
         if (block.id !== blockId) return block;
-        if (
-          block.type === "heading"
-          || block.type === "paragraph"
-          || block.type === "blockquote"
-          || block.type === "preset"
-        ) {
-          return {
-            ...block,
-            runs: applyRunStyleRange(block.runs, start, end, patch),
-          };
-        }
+          if (
+            block.type === "heading"
+            || block.type === "paragraph"
+            || block.type === "blockquote"
+            || block.type === "preset"
+          ) {
+            return {
+              ...block,
+              runs: applyRunStyleRange(block.runs, start, end, patch),
+            };
+          }
+          if (block.type === "custom-component" && block.runs) {
+            return {
+              ...block,
+              runs: applyRunStyleRange(block.runs, start, end, patch),
+            };
+          }
         if (block.type === "list" && itemId) {
           return {
             ...block,
@@ -153,12 +164,21 @@ export function StructuredDraftEditor({
         if (b.type === "preset") {
           return { id: b.id, type: "paragraph", runs: b.runs, sourceNodeId: b.sourceNodeId };
         }
-        if ("presetId" in b && b.presetId) {
-          const copy = { ...b };
-          delete copy.presetId;
-          return copy;
+        if (b.type === "custom-component") {
+          return {
+            id: b.id,
+            type: "paragraph",
+            runs: b.runs ?? plainToRuns(b.snapshot.name),
+            sourceNodeId: b.sourceNodeId,
+          };
         }
-        return b;
+        const next = { ...b } as StructuredArticleBlock & {
+          presetId?: string;
+          customComponent?: unknown;
+        };
+        delete next.presetId;
+        delete next.customComponent;
+        return next;
       }),
     }));
   }
@@ -458,6 +478,18 @@ export function StructuredDraftEditor({
           const isSelected = selectedBlockId === block.id;
           const appliedPreset =
             "presetId" in block && block.presetId ? getXiumiPreset(block.presetId) : undefined;
+          const appliedSnap =
+            block.type === "custom-component"
+              ? block.snapshot
+              : "customComponent" in block
+                ? block.customComponent
+                : undefined;
+          const latestSnapVer =
+            appliedSnap?.sourceItemId ? latestItemVersions[appliedSnap.sourceItemId] : undefined;
+          const canUpgradeSnap =
+            Boolean(appliedSnap?.sourceItemId)
+            && latestSnapVer !== undefined
+            && latestSnapVer > (appliedSnap?.sourceVersion ?? 1);
 
           return (
             <div
@@ -499,13 +531,18 @@ export function StructuredDraftEditor({
                     </span>
                   )}
                   {block.type === "blockquote" && (
-                    <span className="rounded bg-purple-50 px-2 py-0.5 text-[11px] font-medium text-purple-700">
+                    <span className="rounded bg-stone-100 px-2 py-0.5 text-[11px] font-medium text-stone-700">
                       引用块
                     </span>
                   )}
                   {block.type === "preset" && (
                     <span className="rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
                       图文组件块
+                    </span>
+                  )}
+                  {block.type === "custom-component" && (
+                    <span className="rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
+                      库素材快照块
                     </span>
                   )}
                   {block.type === "list" && (
@@ -519,7 +556,7 @@ export function StructuredDraftEditor({
                           ),
                         }))
                       }
-                      className="rounded bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700"
+                      className="rounded bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-800"
                     >
                       {block.ordered ? "有序列表（点击切无序）" : "无序列表（点击切有序）"}
                     </button>
@@ -555,6 +592,41 @@ export function StructuredDraftEditor({
                       >
                         <X size={10} />
                       </button>
+                    </span>
+                  )}
+                  {appliedSnap && (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-900">
+                      <Wand2 size={10} />
+                      <span>
+                        {appliedSnap.name} (快照 v{appliedSnap.sourceVersion})
+                      </span>
+                      {canUpgradeSnap && appliedSnap.sourceItemId && onReapplyBlockSnapshot && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onReapplyBlockSnapshot(block.id, appliedSnap.sourceItemId!);
+                          }}
+                          className="ml-0.5 inline-flex items-center gap-0.5 rounded bg-emerald-800 px-1.5 py-0.5 text-[9px] font-semibold text-white hover:bg-emerald-950"
+                        >
+                          <RefreshCw size={9} />
+                          重新应用 v{latestSnapVer}
+                        </button>
+                      )}
+                      {block.type !== "custom-component" && (
+                        <button
+                          type="button"
+                          aria-label="移除该块导入组件边框"
+                          title="移除组件边框并保留原内容"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            clearBlockPreset(block.id);
+                          }}
+                          className="rounded-full p-0.5 hover:bg-emerald-200/70"
+                        >
+                          <X size={10} />
+                        </button>
+                      )}
                     </span>
                   )}
                 </div>
@@ -776,6 +848,37 @@ export function StructuredDraftEditor({
               {block.type === "divider" && (
                 <div className="py-1">
                   <div className="h-px w-full bg-neutral-200" />
+                </div>
+              )}
+
+              {block.type === "custom-component" && (
+                <div className="space-y-1.5">
+                  {block.runs ? (
+                    <>
+                      <AutoGrowTextarea
+                        minHeightPx={64}
+                        value={runsToPlainText(block.runs)}
+                        onSelect={(e) => captureSelection(e.currentTarget, block.id)}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          onChangeDraft((prev) => ({
+                            ...prev,
+                            blocks: prev.blocks.map((b) =>
+                              b.id === block.id && b.type === "custom-component" && b.runs
+                                ? { ...b, runs: syncPlainTextIntoRuns(b.runs, val) }
+                                : b,
+                            ),
+                          }));
+                        }}
+                        className="w-full rounded-lg border border-neutral-200 p-2.5 text-sm leading-relaxed text-neutral-900 focus:border-neutral-400 focus:outline-none"
+                      />
+                      <RunsBadgePreview runs={block.runs} />
+                    </>
+                  ) : (
+                    <p className="text-xs text-neutral-500">
+                      独立组件快照「{block.snapshot.name}」，已在右侧公众号预览实时渲染。
+                    </p>
+                  )}
                 </div>
               )}
             </div>

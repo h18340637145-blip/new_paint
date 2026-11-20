@@ -212,7 +212,7 @@ export function ArticleStagingDialog({
               </div>
             )}
 
-            {analysis.status !== "ok" ? (
+            {analysis.status !== "ok" && analysis.status !== "generating_in_chain" ? (
               <div className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 p-4 text-xs text-red-800">
                 <AlertCircle size={16} className="mt-0.5 shrink-0 text-red-600" />
                 <div className="space-y-1">
@@ -222,6 +222,15 @@ export function ArticleStagingDialog({
               </div>
             ) : (
               <>
+                {analysis.status === "generating_in_chain" && (
+                  <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-900">
+                    <Clock size={16} className="mt-0.5 shrink-0 text-amber-600" />
+                    <div className="space-y-0.5">
+                      <p className="font-semibold">配图生成中</p>
+                      <p>{analysis.message}</p>
+                    </div>
+                  </div>
+                )}
                 {analysis.needsChainSelection && (
                   <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50/70 p-3.5">
                     <p className="text-xs font-semibold text-amber-950">

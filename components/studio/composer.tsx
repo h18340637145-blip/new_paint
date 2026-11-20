@@ -43,6 +43,7 @@ function getModelIcon(model: Model) {
 export function Composer({
   onSend, home = false, onPickCanvas, canvasAsset, onClearCanvas, onUpload, selecting = false,
   mode = "image", onModeChange, generating = false, attachments = [], onRemoveAttachment, onClearAttachments, projectId,
+  presetPrompt, onPresetConsumed,
 }: {
   onSend: (input: ComposerInput) => Promise<void>;
   home?: boolean;
@@ -58,6 +59,8 @@ export function Composer({
   attachments?: StudioAttachment[];
   onRemoveAttachment?: (id: string) => void;
   onClearAttachments?: () => void;
+  presetPrompt?: string | null;
+  onPresetConsumed?: () => void;
 }) {
   const [skill, setSkill] = useState<StudioSkill | null>(null);
   const [skillMutating, setSkillMutating] = useState(false);
@@ -70,12 +73,23 @@ export function Composer({
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
   const input = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const submitInProgress = useRef(false);
   const image = canvasAsset?.url ?? preview;
   const busy = pending || uploading || skillMutating;
   const isAgent = mode === "agent";
-  const maySend = !!prompt.trim() || (isAgent && attachments.length > 0);
+  const maySend = !!prompt.trim() || (isAgent && attachments.length > 0) || (home && isAgent && !!file);
   const inUpload = useRef(false);
+
+  useEffect(() => {
+    if (presetPrompt) {
+      setPrompt(presetPrompt);
+      onPresetConsumed?.();
+      window.requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+      });
+    }
+  }, [presetPrompt, onPresetConsumed]);
 
   useEffect(() => {
     return () => { if (preview) URL.revokeObjectURL(preview); };
@@ -200,7 +214,7 @@ export function Composer({
         <div className="relative mb-1 flex flex-wrap items-center gap-2">
           {isAgent && attachments.map((asset) => <AttachmentCard key={asset.id} asset={asset}
             onRemove={busy ? undefined : () => onRemoveAttachment?.(asset.id)} />)}
-          {!isAgent && image && (
+          {(!isAgent || home) && image && (
             <div className="relative size-12">
               {/* eslint-disable-next-line @next/next/no-img-element -- 本地预览和短期签名图片直接显示。 */}
               <img className="size-full rounded-xl object-cover" src={image} alt="参考图" />
@@ -226,12 +240,30 @@ export function Composer({
         </div>
       )}
       <textarea
-        className={`block w-full resize-none bg-transparent px-1 py-2 text-sm outline-none placeholder:text-neutral-400 ${home ? "h-14" : "h-16"}`}
-        aria-label="生图提示词"
-        placeholder={home ? "描述你想创作的图片" : "今天我们要创作什么"}
+        ref={textareaRef}
+        className={`block w-full resize-none bg-transparent px-1 py-2 text-sm leading-relaxed outline-none placeholder:text-neutral-400 ${home ? "h-16" : "h-16"}`}
+        aria-label={isAgent ? "图文创意描述" : "生图提示词"}
+        placeholder={
+          isAgent
+            ? "输入选题想法或公众号文章方向，AI 将规划图文分镜并自动铺上画布…"
+            : "描述你想生成的配图画面（支持拖拽或 Ctrl+V 粘贴参考图）…"
+        }
         value={prompt}
         disabled={pending}
         maxLength={isAgent ? maxPromptLength : currentBounds.max}
+        onKeyDown={(event) => {
+          if (
+            event.key === "Enter"
+            && !event.shiftKey
+            && !event.nativeEvent.isComposing
+            && event.keyCode !== 229
+          ) {
+            event.preventDefault();
+            if (maySend && !busy && !selecting) {
+              event.currentTarget.form?.requestSubmit();
+            }
+          }
+        }}
         onChange={(event) => {
           setPrompt(event.target.value);
           if (error) setError("");
@@ -239,20 +271,21 @@ export function Composer({
       />
       {error && <p className="px-1 pb-2 text-xs text-red-700" role="alert">{error}</p>}
       <div className="flex items-end gap-2">
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-          {!home && onModeChange && (
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+          {onModeChange && (
             <ModeMenu mode={mode} disabled={busy || generating} onChange={(value) => {
               setMenu(null);
               onModeChange(value);
             }} />
           )}
           {home && (
-            <button type="button" disabled={pending} aria-label="上传参考图" className="rounded-lg p-1.5 hover:bg-neutral-100" onClick={() => input.current?.click()}>
-              <Plus size={17} />
+            <button type="button" disabled={pending} title="上传参考图" aria-label="上传参考图" className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-xs text-neutral-600 hover:bg-neutral-100 hover:text-neutral-950" onClick={() => input.current?.click()}>
+              <Plus size={15} />
+              <span className="hidden sm:inline">参考图</span>
             </button>
           )}
-          {!home && mode === "agent" ? (
-            <span className="px-2 text-xs text-neutral-600">Agent自动规划</span>
+          {mode === "agent" ? (
+            <span className="px-1.5 text-xs text-neutral-500">自动规划文案与配图</span>
           ) : (
             <>
               <div className="relative">
@@ -305,10 +338,13 @@ export function Composer({
             </>
           )}
         </div>
-        <button type="submit" aria-label="发送" disabled={!maySend || busy || selecting}
-          className="grid size-8 shrink-0 place-items-center rounded-full bg-neutral-900 text-white hover:bg-neutral-700 disabled:bg-neutral-100 disabled:text-neutral-400">
-          {pending ? <LoaderCircle className="animate-spin" size={16} /> : <ArrowUp size={17} />}
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="hidden text-[11px] text-neutral-400 sm:inline">Enter 发送</span>
+          <button type="submit" aria-label="发送" disabled={!maySend || busy || selecting}
+            className="grid size-8 shrink-0 place-items-center rounded-full bg-[#164b3e] text-white hover:bg-[#123d32] disabled:bg-neutral-100 disabled:text-neutral-400">
+            {pending ? <LoaderCircle className="animate-spin" size={16} /> : <ArrowUp size={17} />}
+          </button>
+        </div>
       </div>
     </form>
   );

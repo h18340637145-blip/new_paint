@@ -23,17 +23,17 @@ export interface ArticleTextNodeData extends Record<string, unknown> {
 const ROLE_STYLES: Record<ArticleTextRole, { active: string; cardBorder: string; hint: string }> = {
   material: {
     active: "bg-neutral-900 text-white",
-    cardBorder: "border-neutral-200",
+    cardBorder: "border-neutral-300",
     hint: "由 Qwen 结合上下文扩写润色",
   },
   requirement: {
-    active: "bg-indigo-600 text-white",
-    cardBorder: "border-indigo-300",
+    active: "bg-[#24596b] text-white",
+    cardBorder: "border-[#9ec0cc]",
     hint: "仅作为写作指令参与生成，不直接输出为正文",
   },
   verbatim: {
-    active: "bg-amber-600 text-white",
-    cardBorder: "border-amber-300",
+    active: "bg-amber-700 text-white",
+    cardBorder: "border-amber-400",
     hint: "逐字保留进入最终稿件，模型不会篡改",
   },
 };
